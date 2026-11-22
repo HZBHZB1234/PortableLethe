@@ -21,6 +21,8 @@ export interface HubConfig {
   settings_path: string | null;
   game_dir: string | null;
   proxy: string | null;
+  source_repo_url: string | null;
+  dotnet_sdk_channel: string;
 }
 
 export interface CategoryState {

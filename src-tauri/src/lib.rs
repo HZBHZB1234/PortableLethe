@@ -33,6 +33,7 @@ pub fn run() {
             commands::instance_delete,
             commands::version_list,
             commands::version_install,
+            commands::version_build_from_source,
             commands::version_switch,
             commands::version_rollback,
             commands::resource_status,

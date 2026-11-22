@@ -63,6 +63,7 @@ impl Hub {
     pub fn instances_dir(&self) -> PathBuf { self.root.join("instances") }
     pub fn clientpkg_dir(&self) -> PathBuf { self.root.join("clientpkg") }
     pub fn logs_dir(&self) -> PathBuf { self.root.join("logs") }
+    pub fn tools_dir(&self) -> PathBuf { self.root.join("tools") }
 
     pub fn save_config(&self) -> Result<()> {
         crate::core::util::atomic_write_json(&self.config_path(), &self.config, false)

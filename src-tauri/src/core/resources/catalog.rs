@@ -222,6 +222,11 @@ fn default_catalog_path(hub: &Hub) -> PathBuf {
     PathBuf::from(local).join(r"Low\ProjectMoon\LimbusCompany\com.unity.addressables\catalog_S1.bin")
 }
 
+pub fn find_path(hub: &Hub, catalog_path: Option<&str>) -> Result<PathBuf> {
+    Ok(catalog_path.filter(|s| !s.is_empty()).map(|s| expand_path(s, &hub.root))
+        .unwrap_or_else(|| default_catalog_path(hub)))
+}
+
 pub fn find(hub: &Hub, pattern: &str, catalog_path: Option<&str>) -> Result<Vec<CatalogHit>> {
     let path = catalog_path.filter(|s| !s.is_empty()).map(|s| expand_path(s, &hub.root))
         .unwrap_or_else(|| default_catalog_path(hub));
@@ -255,3 +260,4 @@ mod tests {
         assert!(hits[0].hash.as_ref().map(|h| h.len() == 32).unwrap_or(false));
     }
 }
+

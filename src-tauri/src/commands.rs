@@ -92,6 +92,11 @@ pub async fn version_install(state: State<'_, AppState>, url: Option<String>, ve
 }
 
 #[tauri::command]
+pub async fn version_build_from_source(state: State<'_, AppState>, repo_url: Option<String>, version: Option<String>) -> CResult<VersionInfo> {
+    core::version::build_from_source(&state, repo_url.as_deref(), version.as_deref()).await.map_err(err)
+}
+
+#[tauri::command]
 pub async fn version_switch(state: State<'_, AppState>, version: String) -> CResult<VersionInfo> {
     core::version::switch(&state, &version).await.map_err(err)
 }

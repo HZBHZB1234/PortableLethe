@@ -24,6 +24,9 @@ pub struct HubConfig {
     pub settings_path: Option<String>,
     pub game_dir: Option<String>,
     pub proxy: Option<String>,
+    /// Optional source-build channel settings (doc 02 §3).
+    pub source_repo_url: Option<String>,
+    pub dotnet_sdk_channel: String,
 }
 impl Default for HubConfig {
     fn default() -> Self {
@@ -36,6 +39,7 @@ impl Default for HubConfig {
             health_timeout_ms: 30_000, backoff_base_ms: 1_000, backoff_max_ms: 30_000,
             launcher_source: None, bepinex_source: None, catalog_path: None,
             settings_path: None, game_dir: None, proxy: None,
+            source_repo_url: None, dotnet_sdk_channel: "9.0".into(),
         }
     }
 }

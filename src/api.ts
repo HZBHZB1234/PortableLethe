@@ -24,6 +24,8 @@ export const api = {
   versionList: () => invoke<VersionInfo[]>('version_list'),
   versionInstall: (url?: string | null, version?: string | null, sha256?: string | null) =>
     invoke<VersionInfo>('version_install', { url: url ?? null, version: version ?? null, sha256: sha256 ?? null }),
+  versionBuildFromSource: (repoUrl?: string | null, version?: string | null) =>
+    invoke<VersionInfo>('version_build_from_source', { repoUrl: repoUrl ?? null, version: version ?? null }),
   versionSwitch: (version: string) => invoke<VersionInfo>('version_switch', { version }),
   versionRollback: () => invoke<VersionInfo>('version_rollback'),
 
@@ -52,4 +54,5 @@ export const exampleHubConfig: HubConfig = {
   backoff_base_ms: 1000, backoff_max_ms: 30000,
   launcher_source: null, bepinex_source: null, catalog_path: null,
   settings_path: null, game_dir: null, proxy: null,
+  source_repo_url: null, dotnet_sdk_channel: '9.0',
 };

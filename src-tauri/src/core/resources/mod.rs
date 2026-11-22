@@ -1,6 +1,7 @@
 pub mod catalog;
 pub mod staticdata;
 pub mod modfiles;
+pub mod bundles;
 
 use crate::{error::{Error, Result}, model::SyncReport, state::AppState};
 
@@ -15,7 +16,7 @@ pub async fn sync(state: &AppState, category: &str, source_path: Option<&str>, f
         },
         "modfiles" => modfiles::sync(state, force).await,
         "staticdata" => staticdata::sync(state, source_path).await,
-        "bundles" => Err(Error::msg("bundle diff sync is planned for a later phase")),
+        "bundles" => bundles::sync(state, source_path).await,
         other => Err(Error::msg(format!("unknown resource category: {}", other))),
     }
 }

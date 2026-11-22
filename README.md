@@ -53,6 +53,12 @@ allocation; client package export with binary guard; Addressables catalog v2
 parser; unityfs static data extraction with `.txt`→`.json` normalization;
 modfiles ETag sync.
 
-Stubbed/planned: bundle diff sync (`resource_sync("bundles")` returns an
-explicit error), source-build channel (portable dotnet SDK + `dotnet publish`),
-full `--chains` expansion.
+Also implemented: `resource_sync("bundles")` compares official/private v2
+catalogs and downloads only bundles missing from the private catalog into the
+Unity cache (`<ABRO.bundle_name>/<inner-hash>/__data`); `version_build_from_source`
+installs a portable .NET SDK on demand, clones the configured server repo,
+`dotnet publish`es it, overlays synced static data, and registers the result as
+a normal version.
+
+Still limited: full `--chains` expansion (depth-capped simplification), GUI
+end-to-end download->launch (needs network/prebuilt artifacts).

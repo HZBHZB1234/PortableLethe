@@ -169,3 +169,102 @@ pub async fn rollback(state: &AppState) -> Result<VersionInfo> {
         .ok_or_else(|| Error::msg("no previous version to roll back to"))?;
     switch(state, &prev).await
 }
+
+/// Source-build channel (doc 02 §3): fetch the server source, download a
+/// portable .NET SDK if needed, publish, overlay synced static data, then
+/// register the result as a normal version. Only the toolchain is external.
+pub async fn build_from_source(
+    state: &AppState, repo_url: Option<&str>, version: Option<&str>) -> Result<VersionInfo> {
+    let raw = repo_url.filter(|s| !s.is_empty()).map(str::to_string)
+        .or_else(|| state.hub.config.source_repo_url.clone())
+        .ok_or_else(|| Error::msg("source_repo_url is not configured"))?;
+    let url = util::proxied_github_url(&raw, &state.hub.config.gh_proxy_prefix);
+
+    let tools = state.hub.tools_dir();
+    std::fs::create_dir_all(&tools)?;
+    let sdk_dir = tools.join("dotnet");
+    let sdk_exe = sdk_dir.join(if cfg!(windows) { "dotnet.exe" } else { "dotnet" });
+    if !sdk_exe.is_file() {
+        state.log("info", "build", "downloading portable .NET SDK installer");
+        let client = util::http_client(state.hub.proxy_url().as_deref())?;
+        let bytes = util::fetch(&client, "https://dot.net/v1/dotnet-install.ps1", None).await?.bytes;
+        let script = tools.join("dotnet-install.ps1");
+        std::fs::write(&script, bytes)?;
+        let channel = state.hub.config.dotnet_sdk_channel.clone();
+        let dir = sdk_dir.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let out = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+                .arg(&script)
+                .args(["-Channel", &channel, "-InstallDir"])
+                .arg(&dir).arg("-NoPath").output()?;
+            if !out.status.success() {
+                return Err(Error::msg(String::from_utf8_lossy(&out.stderr).into_owned()));
+            }
+            Ok(())
+        }).await.map_err(|e| Error::msg(e.to_string()))??;
+    }
+
+    let staging = state.hub.staging_dir().join(format!("source-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&staging)?;
+    let repo = staging.join("repo");
+    let clone_url = url.clone();
+    let clone_target = repo.clone();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let out = std::process::Command::new("git")
+            .args(["clone", "--depth", "1", &clone_url])
+            .arg(&clone_target).output()?;
+        if !out.status.success() {
+            return Err(Error::msg(String::from_utf8_lossy(&out.stderr).into_owned()));
+        }
+        Ok(())
+    }).await.map_err(|e| Error::msg(e.to_string()))??;
+
+    let publish_dir = staging.join("publish");
+    let project = repo.join(r"src\OpenLethe.Server\OpenLethe.Server.csproj");
+    let sdk = sdk_exe.clone();
+    let dir = sdk_dir.clone();
+    let out_dir = publish_dir.clone();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let path = std::env::var("PATH").unwrap_or_default();
+        let mut cmd = std::process::Command::new(&sdk);
+        cmd.arg("publish").arg(&project)
+            .args(["-c", "Release", "-r", "win-x64", "--self-contained", "-o"])
+            .arg(&out_dir)
+            .env("DOTNET_ROOT", &dir)
+            .env("PATH", format!("{};{}", dir.display(), path));
+        let out = cmd.output()?;
+        if !out.status.success() {
+            return Err(Error::msg(String::from_utf8_lossy(&out.stderr).into_owned()));
+        }
+        Ok(())
+    }).await.map_err(|e| Error::msg(e.to_string()))??;
+    if find_exe(&publish_dir).is_none() { return Err(Error::msg("publish produced no executable")); }
+
+    // Static data is never embedded: overlay the synced official tree at runtime.
+    let static_src = state.hub.resources_current();
+    if static_src.join("StaticData").is_dir() {
+        let _ = storage::ingest_tree(state, &static_src, &publish_dir.join("static"))?;
+    }
+
+    let name = util::sanitize_name(version.unwrap_or("source-build"));
+    let target = state.hub.current_version_path(&name);
+    if target.exists() { std::fs::remove_dir_all(&target)?; }
+    let files = storage::ingest_tree(state, &publish_dir, &target)?;
+    let info = VersionInfo {
+        name: name.clone(), path: target.to_string_lossy().into_owned(),
+        installed_at: util::now_iso(), size_bytes: util::dir_size(&target),
+        is_current: false, source: format!("source:{}", url),
+    };
+    {
+        let mut p = state.persisted.write().await;
+        p.versions.retain(|v| v.name != name);
+        p.versions.push(info.clone());
+        if p.current_version.is_none() { p.current_version = Some(name.clone()); }
+        prune_versions(state, &mut p).await;
+    }
+    state.persist().await?;
+    let _ = std::fs::remove_dir_all(&staging);
+    state.log("info", "build", &format!("source build installed {} ({} files)", name, files));
+    Ok(info)
+}
