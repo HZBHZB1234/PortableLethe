@@ -1,7 +1,7 @@
 //! Schema-driven config hosting: reads the server's language-neutral
 //! config-schema.json, writes Hub-owned keys into a per-instance bootstrap
 //! file atomically, protects secrets with DPAPI on Windows (doc 02 §4).
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use crate::{core::{dpapi, util, Hub}, error::{Error, Result}, model::*, state::AppState};
 
 fn field_from_json(v: &serde_json::Value) -> Option<ConfigField> {
@@ -164,5 +164,3 @@ pub fn bootstrap_defaults(state: &AppState, id: &str, port: u16) -> JsonMap {
     out
 }
 
-#[allow(dead_code)]
-fn _unused(_: Path) {}

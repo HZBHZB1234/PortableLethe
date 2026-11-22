@@ -1,8 +1,21 @@
 //! Shared application state + event bus. Commands stay thin; all real work is in `core`.
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::RwLock;
 use crate::{core::{Hub, PersistedState}, error::Result, model::*};
+
+/// Process output (captured on OS threads) lands here; commands read both rings.
+pub static GLOBAL_LOGS: std::sync::OnceLock<std::sync::Mutex<VecDeque<LogLine>>> = std::sync::OnceLock::new();
+
+pub fn global_log(line: LogLine) {
+    if let Some(g) = GLOBAL_LOGS.get() {
+        if let Ok(mut v) = g.lock() {
+            v.push_back(line);
+            while v.len() > 500 { v.pop_front(); }
+        }
+    }
+}
 
 pub const EV_INSTANCE_STATE: &str = "instance-state";
 pub const EV_SYNC_PROGRESS: &str = "sync-progress";
@@ -20,26 +33,27 @@ pub struct RuntimeInfo {
 
 pub struct AppState {
     pub hub: Hub,
-    pub persisted: RwLock<PersistedState>,
-    pub runtime: RwLock<BTreeMap<String, RuntimeInfo>>,
-    pub logs: RwLock<VecDeque<LogLine>>,
-    pub handle: std::sync::Mutex<Option<AppHandle>>,
-    pub monitors: std::sync::Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
-    pub children: std::sync::Mutex<HashMap<String, std::sync::Arc<std::sync::Mutex<Option<std::process::Child>>>>>,
+    pub persisted: Arc<RwLock<PersistedState>>,
+    pub runtime: Arc<RwLock<BTreeMap<String, RuntimeInfo>>>,
+    pub logs: Arc<RwLock<VecDeque<LogLine>>>,
+    pub handle: Arc<std::sync::Mutex<Option<AppHandle>>>,
+    pub monitors: Arc<std::sync::Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>>,
+    pub children: Arc<std::sync::Mutex<HashMap<String, std::sync::Arc<std::sync::Mutex<Option<std::process::Child>>>>>>,
 }
 
 impl AppState {
     pub fn new(hub: Hub) -> Result<Self> {
+        let _ = GLOBAL_LOGS.set(std::sync::Mutex::new(VecDeque::with_capacity(512)));
         let persisted = hub.load_state();
         let mut runtime = BTreeMap::new();
         for r in &persisted.instances {
             runtime.insert(r.id.clone(), RuntimeInfo { state: InstanceState::Stopped, pid: None, health: false, restart_count: 0 });
         }
         Ok(Self {
-            hub, persisted: RwLock::new(persisted), runtime: RwLock::new(runtime),
-            logs: RwLock::new(VecDeque::with_capacity(512)),
-            handle: std::sync::Mutex::new(None), monitors: std::sync::Mutex::new(HashMap::new()),
-            children: std::sync::Mutex::new(HashMap::new()),
+            hub, persisted: Arc::new(RwLock::new(persisted)), runtime: Arc::new(RwLock::new(runtime)),
+            logs: Arc::new(RwLock::new(VecDeque::with_capacity(512))),
+            handle: Arc::new(std::sync::Mutex::new(None)), monitors: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            children: Arc::new(std::sync::Mutex::new(HashMap::new())),
         })
     }
 
@@ -49,6 +63,7 @@ impl AppState {
             logs.push_back(line.clone());
             while logs.len() > 500 { logs.pop_front(); }
         }
+        global_log(line.clone());
         let path = self.hub.logs_dir().join("hub.log");
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
             use std::io::Write;

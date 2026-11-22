@@ -10,6 +10,12 @@ pub enum Error {
     Http(#[from] reqwest::Error),
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("walk: {0}")]
+    Walk(#[from] walkdir::Error),
+    #[error("path: {0}")]
+    StripPrefix(#[from] std::path::StripPrefixError),
+    #[error("hex: {0}")]
+    Hex(#[from] hex::FromHexError),
     #[error("{0}")]
     Msg(String),
 }

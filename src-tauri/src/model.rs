@@ -85,8 +85,8 @@ pub struct ConfigSchema {
     pub fields: Vec<ConfigField>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum InstanceState { Stopped, Starting, Running, Unhealthy, Updating, Failed }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum InstanceState { #[default] Stopped, Starting, Running, Unhealthy, Updating, Failed }
 impl InstanceState { pub fn as_str(&self) -> &'static str { match self {
     Self::Stopped => "Stopped", Self::Starting => "Starting", Self::Running => "Running",
     Self::Unhealthy => "Unhealthy", Self::Updating => "Updating", Self::Failed => "Failed" } } }
@@ -144,6 +144,19 @@ pub struct ClientPkgResult {
     pub sha256: String,
     pub size_bytes: u64,
     pub file_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InstanceStateEvent {
+    pub id: String,
+    pub state: InstanceState,
+    pub pid: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RestartRequestedEvent {
+    pub instance_id: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

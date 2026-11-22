@@ -120,6 +120,13 @@ pub async fn clientpkg_export(state: State<'_, AppState>, instance_id: String, o
 pub async fn log_tail(state: State<'_, AppState>, limit: Option<usize>, instance_id: Option<String>) -> CResult<Vec<LogLine>> {
     let limit = limit.unwrap_or(200).min(1000);
     let logs = state.logs.read().await;
+    let mut merged: Vec<LogLine> = logs.iter().cloned().collect();
+    if let Some(g) = crate::state::GLOBAL_LOGS.get() {
+        if let Ok(gl) = g.lock() { merged.extend(gl.iter().cloned()); }
+    }
+    merged.sort_by(|a, b| a.ts.cmp(&b.ts));
+    merged.dedup_by(|a, b| a.ts == b.ts && a.message == b.message);
+    let logs = merged;
     let lines: Vec<LogLine> = if let Some(id) = instance_id {
         logs.iter().filter(|l| l.target.contains(&id)).rev().take(limit).cloned().collect::<Vec<_>>().into_iter().rev().collect()
     } else { logs.iter().rev().take(limit).cloned().collect::<Vec<_>>().into_iter().rev().collect() };
