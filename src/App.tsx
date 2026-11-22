@@ -88,6 +88,7 @@ export default function App() {
 
   const act = async (label: string, fn: () => Promise<unknown>) => {
     setBusy(true);
+    toast(`${label} 开始…`, 'info');
     try {
       const r = await fn();
       toast(`${label} 完成`, 'success');
