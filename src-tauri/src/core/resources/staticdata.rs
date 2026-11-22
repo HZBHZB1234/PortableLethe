@@ -130,7 +130,7 @@ pub fn extract_bundle(bundle: &Path, out_dir: &Path) -> Result<usize> {
         if !p.is_file() { continue; }
         let stem = p.file_stem().unwrap_or_default().to_string_lossy().into_owned();
         let target = out_dir.join(format!("{}.json", stem));
-        std::fs::copy(p, target)?;
+        if p.as_path() != target.as_path() { std::fs::copy(p, &target)?; }
         count += 1;
     }
     Ok(count)
