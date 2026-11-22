@@ -55,7 +55,12 @@ pub async fn sync(state: &AppState, source_path: Option<&str>) -> Result<SyncRep
     let hits = catalog::find(&state.hub, "static_s1_0", Some(&cat_path.to_string_lossy()))?;
     let hit = hits.iter().find(|h| h.bundle_name.as_deref().map(|b: &str| b.contains("static_s1_0")).unwrap_or(false))
         .ok_or_else(|| Error::msg("static_s1_0 bundle not found in catalog"))?;
-    let bundle_name = hit.bundle_name.clone().unwrap_or_default();
+    // ABRO.bundle_name is the bare 32-hex cache-directory name; the real
+    // `<name>_<32hex>.bundle` lives in the catalog key / internalId.
+    let bundle_name = hit.key.clone();
+    if !bundle_name.ends_with(".bundle") {
+        return Err(Error::msg(format!("unexpected static bundle key: {}", bundle_name)));
+    }
     let version = bundle_name.rsplit('_').next().unwrap_or("unknown").trim_end_matches(".bundle").to_string();
     {
         let p = state.persisted.read().await;
@@ -85,7 +90,7 @@ pub async fn sync(state: &AppState, source_path: Option<&str>) -> Result<SyncRep
         let target = if stem.starts_with("EN_") {
             out_root.join("Localize").join("en").join(format!("{}.json", stem))
         } else {
-            out_root.join("StaticData").join(format!("{}.json", stem))
+            out_root.join("StaticData").join("static-data").join(format!("{}.json", stem))
         };
         if let Some(parent) = target.parent() { std::fs::create_dir_all(parent)?; }
         std::fs::copy(&p, &target)?;
@@ -129,4 +134,20 @@ pub fn extract_bundle(bundle: &Path, out_dir: &Path) -> Result<usize> {
         count += 1;
     }
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn unityfs_static_bundle_if_present() {
+        let p = std::env::var("PL_TEST_BUNDLE").unwrap_or_default();
+        if p.is_empty() || !Path::new(&p).is_file() { return; }
+        let out = std::env::temp_dir().join(format!("pl-unityfs-test-{}", uuid::Uuid::new_v4().simple()));
+        let n = extract_bundle(Path::new(&p), &out).unwrap();
+        assert_eq!(n, 2185, "expected 2185 TextAssets (UnityPy parity)");
+        // extract_bundle always writes `<stem>.json`; the 42 `.txt` outputs of
+        // unityfs are normalised here by construction.
+        let _ = std::fs::remove_dir_all(&out);
+    }
 }

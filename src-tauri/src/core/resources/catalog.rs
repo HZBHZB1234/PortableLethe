@@ -196,8 +196,12 @@ impl Catalog {
 pub fn bundle_name_from_internal_id(id: &str) -> Option<String> {
     let mut s = id.rsplit('/').next().unwrap_or(id).to_string();
     if let Some(rest) = s.strip_suffix(".bundle") { s = rest.to_string(); }
-    if s.len() > 33 && s.as_bytes()[32] == b'_' && s[..32].chars().all(|c| c.is_ascii_hexdigit()) {
-        s = s[33..].to_string();
+    // Bundle names end with `_<32hex>`; strip it so the logical name matches
+    // the catalog's dynamic-string decoded ABRO name.
+    if let Some((prefix, hash)) = s.rsplit_once('_') {
+        if hash.len() == 32 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
+            s = prefix.to_string();
+        }
     }
     Some(s)
 }
@@ -242,7 +246,12 @@ mod tests {
         if p.is_empty() || !Path::new(&p).is_file() { return; }
         let mut cat = Catalog::open(Path::new(&p)).unwrap();
         let hits = cat.find("static_s1_0").unwrap();
+        for h in hits.iter().take(5) {
+            println!("HIT key={} internal={:?} bundle={:?} hash={:?}", h.key, h.internal_id, h.bundle_name, h.hash);
+        }
         assert!(!hits.is_empty(), "static_s1_0 must be found in catalog");
-        assert!(hits.iter().any(|h| h.bundle_name.as_deref().map(|b| b.contains("static_s1_0")).unwrap_or(false)));
+        assert!(hits.iter().any(|h| h.key.contains("static_s1_0_assets_all_")
+            && h.key.ends_with(".bundle")));
+        assert!(hits[0].hash.as_ref().map(|h| h.len() == 32).unwrap_or(false));
     }
 }
