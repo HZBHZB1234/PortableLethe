@@ -8,6 +8,7 @@ import type {
 // The UI never touches the filesystem or spawns processes itself.
 export const api = {
   hubStatus: () => invoke<HubStatus>('hub_status'),
+  hubRevealDir: () => invoke<boolean>('hub_reveal_dir'),
   hubConfigSchema: () => invoke<ConfigSchema>('hub_config_schema'),
   hubConfigGet: (instanceId: string) => invoke<Record<string, unknown>>('hub_config_get', { instanceId }),
   hubConfigSet: (instanceId: string, values: Record<string, unknown>) =>
@@ -20,6 +21,7 @@ export const api = {
   instanceStop: (id: string) => invoke<InstanceInfo>('instance_stop', { id }),
   instanceRestart: (id: string) => invoke<InstanceInfo>('instance_restart', { id }),
   instanceDelete: (id: string) => invoke<boolean>('instance_delete', { id }),
+  instanceOpenAdmin: (id: string) => invoke<boolean>('instance_open_admin', { id }),
 
   versionList: () => invoke<VersionInfo[]>('version_list'),
   versionInstall: (url?: string | null, version?: string | null, sha256?: string | null) =>

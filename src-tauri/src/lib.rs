@@ -21,6 +21,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::hub_status,
+            commands::hub_reveal_dir,
             commands::hub_config_schema,
             commands::hub_config_get,
             commands::hub_config_set,
@@ -31,6 +32,7 @@ pub fn run() {
             commands::instance_stop,
             commands::instance_restart,
             commands::instance_delete,
+            commands::instance_open_admin,
             commands::version_list,
             commands::version_install,
             commands::version_build_from_source,

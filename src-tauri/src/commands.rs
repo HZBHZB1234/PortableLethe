@@ -7,6 +7,29 @@ type CResult<T> = std::result::Result<T, ErrorBody>;
 fn err<E: Into<Error>>(e: E) -> ErrorBody { ErrorBody::from(e.into()) }
 fn todo(feature: &str) -> ErrorBody { err(Error::msg(format!("{}: pending implementation", feature))) }
 
+/// Open a URL or directory with the OS default handler. Arguments are passed
+/// as separate values; no shell string is built from user input.
+fn reveal(target: &str, is_url: bool) -> CResult<bool> {
+    #[cfg(windows)]
+    {
+        let mut cmd = std::process::Command::new(if is_url { "rundll32" } else { "explorer" });
+        if is_url { cmd.args(["url.dll,FileProtocolHandler", target]); }
+        else { cmd.arg(target); }
+        cmd.spawn().map_err(err)?;
+    }
+    #[cfg(not(windows))]
+    {
+        let mut cmd = std::process::Command::new("xdg-open");
+        cmd.arg(target).spawn().map_err(err)?;
+    }
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn hub_reveal_dir(state: State<'_, AppState>) -> CResult<bool> {
+    reveal(&state.hub.root.to_string_lossy(), false)
+}
+
 #[tauri::command]
 pub async fn hub_status(state: State<'_, AppState>) -> CResult<HubStatus> {
     let p = state.persisted.read().await;
@@ -79,6 +102,14 @@ pub async fn instance_restart(state: State<'_, AppState>, id: String) -> CResult
 #[tauri::command]
 pub async fn instance_delete(state: State<'_, AppState>, id: String) -> CResult<bool> {
     core::process::delete(&state, &id).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn instance_open_admin(state: State<'_, AppState>, id: String) -> CResult<bool> {
+    let items = core::process::list(&state).await.map_err(err)?;
+    let inst = items.into_iter().find(|i| i.id == id)
+        .ok_or_else(|| err(Error::msg("instance not found")))?;
+    reveal(&format!("http://127.0.0.1:{}/admin/", inst.port), true)
 }
 
 #[tauri::command]
