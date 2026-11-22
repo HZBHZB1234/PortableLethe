@@ -1,0 +1,19 @@
+[package]
+name = "wasm-bindgen"
+version = "0.2.130"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Offline placeholder for wasm-only dependency (never compiled on desktop)."
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+std = []
+serde-serialize = []
+debugger = []
+msrv = []
+strict-macro = []
+strict-checked-vm = []
+

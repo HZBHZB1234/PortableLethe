@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Hub UI only uses Tauri commands and events; no direct filesystem or shell access.","local":true,"windows":["main"],"permissions":["core:default"]}}

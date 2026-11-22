@@ -1,0 +1,61 @@
+[package]
+name = "portable-lethe-hub"
+version = "0.1.0"
+description = "Portable Lethe Hub - Tauri 2 desktop control center (pure Rust core)"
+authors = ["PortableLethe"]
+edition = "2021"
+rust-version = "1.80"
+
+[lib]
+name = "portable_lethe_hub_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls", "json"] }
+futures-util = "0.3"
+sha2 = "0.10"
+hex = "0.4"
+flate2 = "1"
+crc32fast = "1"
+rust-ini = "0.21"
+twox-hash = "2"
+unityfs = "0.1.4"
+regex = "1"
+walkdir = "2"
+anyhow = "1"
+thiserror = "2"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"
+uuid = { version = "1", features = ["v4"] }
+
+# NOTE: the design doc also lists `zip`, `git2` and `reflink`. This build
+# environment has no crates.io access, so those three are intentionally NOT
+# resolved here. Pure-Rust equivalents live in `core/zipfile.rs` (flate2),
+# `core/storage.rs` (hardlink + copy) and `version.rs` (HTTP release download).
+# To switch backends on a networked machine, uncomment these lines:
+# zip = { version = "2", optional = true }
+# git2 = { version = "0.20", optional = true }
+# reflink = { version = "0.2", optional = true }
+# and map the empty features below to dep:zip / dep:git2 / dep:reflink.
+
+[features]
+default = []
+zip-crate = []
+git2-crate = []
+reflink-crate = []
+all-toolchains = ["zip-crate", "git2-crate", "reflink-crate"]
+
+# Offline-environment workaround: empty placeholders for wasm32-only transitive
+# dependencies that have no cached .crate archive. Remove on networked machines.
+[patch.crates-io]
+js-sys = { path = "../patches/js-sys" }
+web-sys = { path = "../patches/web-sys" }
+wasm-bindgen-futures = { path = "../patches/wasm-bindgen-futures" }
+wasm-streams = { path = "../patches/wasm-streams" }
