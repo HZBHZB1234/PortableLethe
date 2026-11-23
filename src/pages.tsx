@@ -12,6 +12,7 @@ interface Props {
   status?: HubStatus | null;
   refresh?: () => Promise<void>;
   onNavigate?: (page: Page) => void;
+  onCheckDeps?: () => Promise<void>;
 }
 
 function Section({ title, desc, action, children }: {
@@ -31,7 +32,7 @@ function Kpi({ label, value, foot, small }: { label: string; value: string | num
   </section>;
 }
 
-export function DashboardPage({ status, act, busy, onNavigate }: Props) {
+export function DashboardPage({ status, act, busy, onNavigate, onCheckDeps }: Props) {
   const cats = status?.resources?.categories ?? {};
   const versions = status?.version_count ?? 0;
   const instances = status?.instance_count ?? 0;
@@ -51,6 +52,7 @@ export function DashboardPage({ status, act, busy, onNavigate }: Props) {
         <button className="btn ghost" disabled={busy} onClick={() => void act('创建默认实例', () => api.instanceCreate('default'))}>创建默认实例</button>
         <button className="btn ghost" onClick={() => onNavigate?.('Instances')}>管理实例 →</button>
         <button className="btn ghost" disabled={busy} onClick={() => void act('打开 Hub 目录', () => api.hubRevealDir())}>打开 Hub 目录</button>
+        <button className="btn ghost" disabled={busy} onClick={() => void onCheckDeps?.()}>检查并修复依赖</button>
       </div>
       <div className="divider" style={{ margin: '16px 0' }} />
       <p className="subtle">Hub 内部为纯 Rust；仅在安装 / 编译阶段调用外部工具链。下载自动走 gh-proxy 前缀与 SHA256 校验。</p>

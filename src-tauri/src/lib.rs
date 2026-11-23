@@ -16,12 +16,30 @@ pub fn run() {
             let state = AppState::new(hub).map_err(|e| e.to_string())?;
             *state.handle.lock().map_err(|_| "log handle poisoned")? = Some(app.handle().clone());
             state.log("info", "hub", "Portable Lethe Hub starting");
+            // Auto-configure missing per-instance dependencies on every launch.
+            let startup = AppState {
+                hub: state.hub.clone(), persisted: state.persisted.clone(),
+                runtime: state.runtime.clone(), logs: state.logs.clone(),
+                handle: state.handle.clone(), monitors: state.monitors.clone(),
+                children: state.children.clone(),
+            };
+            tauri::async_runtime::spawn(async move {
+                match crate::core::process::ensure_deps(&startup, None).await {
+                    Ok(rep) if !rep.fixed.is_empty() => startup.log("info", "deps",
+                        &format!("auto-configured: {}", rep.fixed.join(", "))),
+                    Ok(rep) if !rep.missing.is_empty() => startup.log("warn", "deps",
+                        &format!("missing: {}", rep.missing.join("; "))),
+                    Ok(_) => {},
+                    Err(e) => startup.log("warn", "deps", &format!("check failed: {}", e)),
+                }
+            });
             app.manage(state);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::hub_status,
             commands::hub_reveal_dir,
+            commands::hub_ensure_deps,
             commands::hub_config_schema,
             commands::hub_config_get,
             commands::hub_config_set,

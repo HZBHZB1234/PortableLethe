@@ -38,6 +38,23 @@ function Icon({ name }: { name: string }) {
 
 type Toast = { id: number; text: string; tone: 'info' | 'error' | 'success' };
 
+/// Tauri rejects with strings, Error objects, or plain {message, code} objects.
+/// String(e) turns the latter into "[object Object]" - always extract a real message.
+function errorText(e: unknown): string {
+  if (typeof e === 'string') return e;
+  if (e instanceof Error) return e.message;
+  if (e && typeof e === 'object') {
+    const o = e as Record<string, unknown>;
+    const message = o.message ?? o.error ?? o.reason;
+    if (typeof message === 'string' && message) {
+      const code = typeof o.code === 'string' || typeof o.code === 'number' ? ` (${o.code})` : '';
+      return message + code;
+    }
+    try { return JSON.stringify(e); } catch { /* fall through */ }
+  }
+  return String(e);
+}
+
 export default function App() {
   const [page, setPage] = useState<PageName>('Dashboard');
   const [status, setStatus] = useState<HubStatus | null>(null);
@@ -51,12 +68,12 @@ export default function App() {
   const toast = useCallback((text: string, tone: Toast['tone'] = 'info') => {
     const id = ++toastId.current;
     setToasts((prev) => [...prev.slice(-3), { id, text, tone }]);
-    window.setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 5000);
+    window.setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), tone === 'error' ? 10000 : 5000);
   }, []);
 
   const refresh = useCallback(async () => {
     try { setStatus(await api.hubStatus()); }
-    catch (e) { toast(String(e), 'error'); }
+    catch (e) { toast(errorText(e), 'error'); }
     try { setLogs(await api.logTail(300)); }
     catch { /* offline preview */ }
   }, [toast]);
@@ -95,9 +112,21 @@ export default function App() {
       await refresh();
       return r;
     } catch (e) {
-      toast(`${label} 失败: ${String(e)}`, 'error');
+      toast(`${label} 失败: ${errorText(e)}`, 'error');
       return undefined;
     } finally { setBusy(false); setProgress(null); }
+  };
+
+  const checkDeps = async () => {
+    setBusy(true);
+    try {
+      const r = await api.hubEnsureDeps(null);
+      const detail = r.missing.length ? `；缺失: ${r.missing.join('; ')}` : '';
+      toast(`依赖检查完成：修复 ${r.fixed.length} 项${detail}`,
+        r.missing.length ? 'error' : 'success');
+      await refresh();
+    } catch (e) { toast(`依赖检查失败: ${errorText(e)}`, 'error'); }
+    finally { setBusy(false); }
   };
 
   const current = NAV.find((n) => n.key === page)!;
@@ -152,7 +181,7 @@ export default function App() {
         </div></div>}
 
         <div className="content"><div className="content-inner">
-          {page === 'Dashboard' && <DashboardPage status={status} act={act} busy={busy} onNavigate={setPage} />}
+          {page === 'Dashboard' && <DashboardPage status={status} act={act} busy={busy} onNavigate={setPage} onCheckDeps={checkDeps} />}
           {page === 'Versions' && <VersionsPage status={status} act={act} busy={busy} refresh={refresh} />}
           {page === 'Instances' && <InstancesPage status={status} act={act} busy={busy} />}
           {page === 'Config' && <ConfigPage act={act} busy={busy} />}

@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import type {
-  ClientPkgResult, ConfigSchema, HubConfig, HubStatus, InstanceInfo,
+  ClientPkgResult, ConfigSchema, DepReport, HubConfig, HubStatus, InstanceInfo,
   LogLine, ResourceStatus, SyncReport, VersionInfo,
 } from './types';
 
@@ -9,6 +9,7 @@ import type {
 export const api = {
   hubStatus: () => invoke<HubStatus>('hub_status'),
   hubRevealDir: () => invoke<boolean>('hub_reveal_dir'),
+  hubEnsureDeps: (instanceId?: string | null) => invoke<DepReport>('hub_ensure_deps', { instanceId: instanceId ?? null }),
   hubConfigSchema: () => invoke<ConfigSchema>('hub_config_schema'),
   hubConfigGet: (instanceId: string) => invoke<Record<string, unknown>>('hub_config_get', { instanceId }),
   hubConfigSet: (instanceId: string, values: Record<string, unknown>) =>

@@ -75,6 +75,11 @@ pub async fn hub_config_update(state: State<'_, AppState>, values: JsonMap) -> C
 }
 
 #[tauri::command]
+pub async fn hub_ensure_deps(state: State<'_, AppState>, instance_id: Option<String>) -> CResult<crate::core::process::DepReport> {
+    core::process::ensure_deps(&state, instance_id.as_deref()).await.map_err(err)
+}
+
+#[tauri::command]
 pub async fn instance_list(state: State<'_, AppState>) -> CResult<Vec<InstanceInfo>> {
     core::process::list(&state).await.map_err(err)
 }

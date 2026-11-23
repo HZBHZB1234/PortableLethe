@@ -25,6 +25,11 @@ export interface HubConfig {
   dotnet_sdk_channel: string;
 }
 
+export interface DepReport {
+  fixed: string[];
+  missing: string[];
+}
+
 export interface CategoryState {
   version: string | null;
   etag: string | null;

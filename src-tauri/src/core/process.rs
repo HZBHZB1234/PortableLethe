@@ -6,6 +6,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{Emitter, Manager};
+use serde::Serialize;
 use crate::{core::{config, storage, util}, error::{Error, Result}, model::*, state::{AppState, RuntimeInfo, RuntimeInfoPatch}};
 
 fn find_exe(root: &Path) -> Option<PathBuf> {
@@ -120,6 +121,76 @@ async fn monitor_loop(state: AppState, id: String, rec: InstanceRecord,
     state.set_runtime(&id, RuntimeInfoPatch { state: Some(InstanceState::Stopped), pid: Some(0), health: Some(false), restart_count: None }).await;
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct DepReport {
+    pub fixed: Vec<String>,
+    pub missing: Vec<String>,
+}
+
+fn ensure_link(target: &std::path::Path, link: &std::path::Path, label: &str, rep: &mut DepReport) {
+    if link.symlink_metadata().is_ok() { return; }
+    if target.is_dir() {
+        match util::create_junction(target, link) {
+            Ok(()) => rep.fixed.push(label.to_string()),
+            Err(e) => rep.missing.push(format!("{}: {}", label, e)),
+        }
+    } else {
+        rep.missing.push(format!("{} 源目录不存在: {}", label, target.display()));
+    }
+}
+
+/// Self-heal everything a running instance needs: version/server/wwwroot/static
+/// links, directories and its bootstrap config. Called on Hub startup, instance
+/// start, and from the UI's "检查依赖" button.
+pub async fn ensure_deps(state: &AppState, id: Option<&str>) -> Result<DepReport> {
+    let records: Vec<InstanceRecord> = {
+        let p = state.persisted.read().await;
+        p.instances.iter()
+            .filter(|i| id.map_or(true, |x| x == i.id))
+            .cloned().collect()
+    };
+    let mut rep = DepReport::default();
+    for rec in records {
+        let dir = state.hub.instance_dir(&rec.id);
+        for sub in ["data", "logs", "modfiles", "plugins"] {
+            if std::fs::create_dir_all(dir.join(sub)).is_err() {
+                rep.missing.push(format!("{}: 无法创建 {} 目录", rec.id, sub));
+            }
+        }
+        let ver = rec.version.clone().or_else(|| state.persisted.try_read().ok()
+            .and_then(|p| p.current_version.clone()))
+            .ok_or_else(|| Error::msg("no version installed"))?;
+        let vp = state.hub.current_version_path(&ver);
+        if !vp.join("OpenLethe.Server.exe").is_file() && !vp.join("OpenLethe.Server.dll").is_file() {
+            rep.missing.push(format!("{}: 版本 {} 未安装", rec.id, ver));
+            continue;
+        }
+        ensure_link(&vp, &dir.join("server"), &format!("{}:server", rec.id), &mut rep);
+        if vp.join("wwwroot").is_dir() {
+            ensure_link(&vp.join("wwwroot"), &dir.join("wwwroot"), &format!("{}:wwwroot", rec.id), &mut rep);
+        }
+        if vp.join("plugins").is_dir() {
+            ensure_link(&vp.join("plugins"), &dir.join("plugins-src"), &format!("{}:plugins", rec.id), &mut rep);
+        }
+        let res = state.hub.resources_current();
+        if res.join("StaticData").is_dir() {
+            ensure_link(&res, &dir.join("static"), &format!("{}:static", rec.id), &mut rep);
+        } else {
+            rep.missing.push(format!("{}: 静态数据未同步（资源页点“同步全部资源”）", rec.id));
+        }
+        if res.join("modfiles").is_dir() {
+            ensure_link(&res.join("modfiles"), &dir.join("modfiles-src"), &format!("{}:modfiles", rec.id), &mut rep);
+        }
+        let boot = dir.join("data").join("server.bootstrap.json");
+        if !boot.is_file() {
+            let defaults = config::bootstrap_defaults(state, &rec.id, rec.port);
+            config::set(state, &rec.id, &defaults).await?;
+            rep.fixed.push(format!("{}:bootstrap", rec.id));
+        }
+    }
+    Ok(rep)
+}
+
 pub async fn info(state: &AppState, id: &str) -> Result<InstanceInfo> {
     list(state).await?.into_iter().find(|i| i.id == id)
         .ok_or_else(|| Error::msg(format!("unknown instance {}", id)))
@@ -182,12 +253,10 @@ pub async fn start(state: &AppState, id: &str) -> Result<InstanceInfo> {
         p.instances.iter().find(|i| i.id == id).cloned().ok_or_else(|| Error::msg("unknown instance"))?
     };
     stop_monitor(state, id).await;
-    // Self-heal links for instances created by older Hub builds.
-    if let Some(ver) = rec.version.as_deref() {
-        let wwwroot = state.hub.current_version_path(ver).join("wwwroot");
-        if wwwroot.is_dir() {
-            let _ = util::create_junction(&wwwroot, &state.hub.instance_dir(id).join("wwwroot"));
-        }
+    // Self-heal links/config for instances created by older Hub builds.
+    let deps = ensure_deps(state, Some(id)).await?;
+    if !deps.fixed.is_empty() {
+        state.log("info", "process", &format!("auto-configured {}: {}", id, deps.fixed.join(", ")));
     }
     let child = spawn_child(state, &rec)?;
     let pid = child.id();
