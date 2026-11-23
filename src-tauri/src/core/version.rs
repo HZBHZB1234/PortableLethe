@@ -2,7 +2,7 @@
 //! install, junction switch and rollback (doc 02 §3).
 use std::path::{Path, PathBuf};
 use tauri::Emitter;
-use crate::{core::{storage, util, zipfile}, error::{Error, Result}, model::VersionInfo, state::{AppState, EV_DOWNLOAD_PROGRESS}};
+use crate::{core::{storage, util, zipfile}, error::{Error, Result}, model::VersionInfo, state::{AppState, EV_DOWNLOAD_PROGRESS, EV_SYNC_PROGRESS}};
 
 fn asset_from_release(json: &serde_json::Value) -> Result<(String, String)> {
     let tag = json.get("tag_name").and_then(|v| v.as_str()).unwrap_or("latest").to_string();
@@ -95,6 +95,14 @@ pub async fn install(state: &AppState, url: Option<&str>, version: Option<&str>,
     }
     if sha.is_empty() { return Err(Error::msg(format!("download failed: {}", last_err))); }
     state.log("info", "version", &format!("download complete: {} sha256={}", name, sha));
+    let emit_phase = |phase: &str| {
+        if let Some(h) = &handle {
+            let _ = h.emit(EV_SYNC_PROGRESS, serde_json::json!({
+                "phase": phase, "current": 0, "total": 0, "message": "",
+            }));
+        }
+    };
+    emit_phase("extracting");
     let count = zipfile::extract_zip(&zip_path, &extracted)
         .map_err(|e| { state.log("error", "version", &format!("extract failed: {}", e)); e })?;
     state.log("info", "version", &format!("extracted {} files", count));
@@ -105,6 +113,7 @@ pub async fn install(state: &AppState, url: Option<&str>, version: Option<&str>,
     }
     let target = state.hub.current_version_path(&name);
     if target.exists() { std::fs::remove_dir_all(&target)?; }
+    emit_phase("indexing");
     let files = storage::ingest_tree(state, &extracted, &target)?;
     let info = VersionInfo {
         name: name.clone(), path: target.to_string_lossy().into_owned(),

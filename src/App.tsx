@@ -86,7 +86,7 @@ export default function App() {
       void Promise.all([
         onEvent<LogLine>('log-line', (l) => setLogs((prev) => [...prev.slice(-999), l])),
         onEvent<ProgressEvent>('sync-progress', (p) => setProgress(p)),
-        onEvent<ProgressEvent>('download-progress', (p) => setProgress({ ...p, phase: `download ${p.phase}` })),
+        onEvent<ProgressEvent>('download-progress', (p) => setProgress({ ...p, phase: p.phase ? `download ${p.phase}` : 'download' })),
         onEvent<InstanceStateEvent>('instance-state', () => void refresh()),
         onEvent<RestartRequestedEvent>('restart-requested', (r) => toast(`${r.instance_id} 请求重启: ${r.reason}`, 'info')),
       ]).then((fns) => { unsubs = fns; });
@@ -170,10 +170,15 @@ export default function App() {
         {progress && <div className="banner"><div className="banner-inner">
           <div className="card">
             <div className="row" style={{ justifyContent: 'space-between' }}>
-              <span className="subtle">{[progress.phase || 'download', progress.message].filter(Boolean).join(' · ')}</span>
-              <span className="muted num">{progress.current}/{progress.total}</span>
+              <span className="subtle">{[({
+                download: '下载中', extracting: '解压中', indexing: '建立索引中',
+              } as Record<string, string>)[progress.phase] ?? progress.phase ?? '处理中', progress.message].filter(Boolean).join(' · ')}</span>
+              {progress.total > 0 && <span className="muted num">{pct}% · {progress.current}/{progress.total}</span>}
             </div>
-            {pct !== null && <div className="progress-wrap" style={{ marginTop: 8 }}><div className="progress-bar" style={{ width: `${pct}%` }} /></div>}
+            <div className="progress-wrap" style={{ marginTop: 8 }}>
+              <div className={progress.total > 0 ? 'progress-bar' : 'progress-bar indeterminate'}
+                   style={progress.total > 0 ? { width: `${pct}%` } : undefined} />
+            </div>
           </div>
         </div></div>}
         {toasts.length > 0 && <div className="banner"><div className="banner-inner stack">
