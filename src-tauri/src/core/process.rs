@@ -153,6 +153,10 @@ pub async fn create(state: &AppState, name: &str, version: Option<&str>, port: O
     let version_path = state.hub.current_version_path(&ver);
     if !version_path.is_dir() { return Err(Error::msg(format!("version {} not installed", ver))); }
     util::create_junction(&version_path, &dir.join("server"))?;
+    // ASP.NET Core uses the instance dir as its content root, so the admin
+    // panel's wwwroot must be visible there as well.
+    let wwwroot = version_path.join("wwwroot");
+    if wwwroot.is_dir() { util::create_junction(&wwwroot, &dir.join("wwwroot"))?; }
     let resources = state.hub.resources_current();
     if resources.is_dir() {
         util::create_junction(&resources, &dir.join("static"))?;
@@ -178,6 +182,13 @@ pub async fn start(state: &AppState, id: &str) -> Result<InstanceInfo> {
         p.instances.iter().find(|i| i.id == id).cloned().ok_or_else(|| Error::msg("unknown instance"))?
     };
     stop_monitor(state, id).await;
+    // Self-heal links for instances created by older Hub builds.
+    if let Some(ver) = rec.version.as_deref() {
+        let wwwroot = state.hub.current_version_path(ver).join("wwwroot");
+        if wwwroot.is_dir() {
+            let _ = util::create_junction(&wwwroot, &state.hub.instance_dir(id).join("wwwroot"));
+        }
+    }
     let child = spawn_child(state, &rec)?;
     let pid = child.id();
     let arc = Arc::new(Mutex::new(Some(child)));
