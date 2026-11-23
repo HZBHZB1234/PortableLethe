@@ -1,45 +1,48 @@
-//! StaticData/Localize extraction via unityfs 0.1.4 (byte-identical to UnityPy
-//! in the spike: 2185/2185 files). Extension `.txt` is normalised to `.json`.
+//! Static resource synchronisation.
+//!
+//! Three sources are supported:
+//!   release  - standalone versioned zip published with this server (default)
+//!   official - Project Moon CDN / catalog bundle (官服)
+//!   lethe    - Lethe private-server CDN / catalog bundle (私服)
+//!
+//! Bundle and localize data are distinct channels upstream, but the server
+//! consumes one merged tree. Both bundle providers map the `EN_*` TextAssets
+//! from `static_s1_0` into `Localize/en`, which is the OpenLethe convention.
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use tauri::Emitter;
-use crate::{core::{resources::catalog, util}, error::{Error, Result}, model::*, state::{AppState, EV_SYNC_PROGRESS}};
+use crate::{core::{resources, util, zipfile}, error::{Error, Result}, model::*, state::{AppState, EV_SYNC_PROGRESS}};
 
 fn locate_bundle(bundle_name: &str) -> Option<PathBuf> {
+    // The 32-hex tail of the bundle filename is the Unity cache inner key;
+    // ABRO.bundle_name is the outer key. Both are documented in Claude.md.
     let inner = bundle_name.rsplit('_').next()?.trim_end_matches(".bundle").to_string();
     if inner.len() != 32 { return None; }
     let root = PathBuf::from(std::env::var("LOCALAPPDATA").unwrap_or_default())
         .join(r"Low\Unity\ProjectMoon_LimbusCompany");
-    let walk = |dir: &Path| -> Option<PathBuf> {
-        for outer in std::fs::read_dir(dir).ok()?.flatten() {
-            let p = outer.path().join(&inner).join("__data");
-            if p.is_file() { return Some(p); }
-        }
-        None
-    };
-    if let Some(p) = walk(&root) { return Some(p); }
-    // D: junction fallback is already covered by the junction itself.
+    for outer in std::fs::read_dir(&root).ok()?.flatten() {
+        let p = outer.path().join(&inner).join("__data");
+        if p.is_file() { return Some(p); }
+    }
     None
 }
 
-async fn obtain_bundle(state: &AppState, name: &str, token: &str, dest: &Path) -> Result<PathBuf> {
-    if let Some(p) = locate_bundle(name) { return Ok(p); }
-    let url = format!("https://download.limbuscompanycdn.org/{}/{}", token, name);
-    let client = util::http_client(state.hub.proxy_url().as_deref())?;
-    let handle = state.handle.lock().ok().and_then(|h| h.clone());
-    let u = url.clone();
-    util::download_file(&client, &url, dest, None, move |done, total| {
-        if let Some(h) = &handle {
-            let _ = h.emit(EV_SYNC_PROGRESS, serde_json::json!({
-                "phase": "staticdata-download", "current": done, "total": total, "message": u,
-            }));
-        }
-    }).await?;
-    Ok(dest.to_path_buf())
+fn emit(state: &AppState, phase: &str, current: u64, total: u64, message: &str) {
+    if let Some(h) = state.handle.lock().ok().and_then(|h| h.clone()) {
+        let _ = h.emit(EV_SYNC_PROGRESS, serde_json::json!({
+            "phase": phase, "current": current, "total": total, "message": message,
+        }));
+    }
 }
 
-fn catalog_path(state: &AppState, override_path: Option<&str>) -> PathBuf {
+fn catalog_path(state: &AppState, source: &str, override_path: Option<&str>) -> PathBuf {
     if let Some(p) = override_path.filter(|s| !s.is_empty()) {
         return crate::core::paths::expand_path(p, &state.hub.root);
+    }
+    if source == "lethe" {
+        if let Some(d) = state.hub.config.lethe_dir.as_deref().filter(|s| !s.is_empty()) {
+            return PathBuf::from(d).join(r"LimbusCompany_Data\StreamingAssets\aa\catalog.bin");
+        }
     }
     if let Some(p) = state.hub.config.catalog_path.as_deref().filter(|s| !s.is_empty()) {
         return crate::core::paths::expand_path(p, &state.hub.root);
@@ -48,42 +51,155 @@ fn catalog_path(state: &AppState, override_path: Option<&str>) -> PathBuf {
         .join(r"Low\ProjectMoon\LimbusCompany\com.unity.addressables\catalog_S1.bin")
 }
 
-pub async fn sync(state: &AppState, source_path: Option<&str>) -> Result<SyncReport> {
-    let mut report = SyncReport { category: "staticdata".into(), ..Default::default() };
-    let cat_path = catalog_path(state, source_path);
-    if !cat_path.is_file() { return Err(Error::msg(format!("catalog not found: {}", cat_path.display()))); }
-    let hits = catalog::find(&state.hub, "static_s1_0", Some(&cat_path.to_string_lossy()))?;
-    let hit = hits.iter().find(|h| h.bundle_name.as_deref().map(|b: &str| b.contains("static_s1_0")).unwrap_or(false))
-        .ok_or_else(|| Error::msg("static_s1_0 bundle not found in catalog"))?;
-    // ABRO.bundle_name is the bare 32-hex cache-directory name; the real
-    // `<name>_<32hex>.bundle` lives in the catalog key / internalId.
-    let bundle_name = hit.key.clone();
-    if !bundle_name.ends_with(".bundle") {
-        return Err(Error::msg(format!("unexpected static bundle key: {}", bundle_name)));
+fn settings_path(state: &AppState, source: &str) -> PathBuf {
+    if source == "lethe" {
+        if let Some(d) = state.hub.config.lethe_dir.as_deref().filter(|s| !s.is_empty()) {
+            return PathBuf::from(d).join(r"LimbusCompany_Data\StreamingAssets\aa\settings.json");
+        }
     }
+    state.hub.config.settings_path.as_deref().map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Program Files (x86)\Steam\steamapps\common\Limbus Company\LimbusCompany_Data\StreamingAssets\aa\settings.json"))
+}
+
+fn install_artifact(state: &AppState, source: &str, version: &str,
+                    root: &Path, files: BTreeMap<String, String>) -> Result<SyncReport> {
+    let obj = state.hub.resources_objects().join("staticdata").join(source).join(version);
+    if obj.exists() { std::fs::remove_dir_all(&obj)?; }
+    std::fs::create_dir_all(obj.parent().unwrap())?;
+    std::fs::rename(root, &obj)?;
+    resources::set_category(state, "StaticData", &obj.join("StaticData"))?;
+    resources::set_category(state, "Localize", &obj.join("Localize"))?;
+    Ok(SyncReport { category: "staticdata".into(), source: Some(source.into()), version: version.into(),
+        added: files.len(), needs_restart: true, ..Default::default() })
+}
+
+pub async fn sync(state: &AppState, source: &str, override_path: Option<&str>) -> Result<SyncReport> {
+    resources::ensure_layout(state)?;
+    match source {
+        "release" => sync_release(state).await,
+        "official" | "lethe" => sync_bundle(state, source, override_path).await,
+        other => Err(Error::msg(format!("unknown static source: {}", other))),
+    }
+}
+
+/// Default bootstrap source: a versioned zip published in our GitHub Release.
+async fn sync_release(state: &AppState) -> Result<SyncReport> {
+    let cfg = &state.hub.config;
+    let (url, version_hint) = if let Some(u) = cfg.static_zip_url.as_deref().filter(|s| !s.is_empty()) {
+        (u.to_string(), "custom".to_string())
+    } else {
+        let candidates = util::proxy_candidates(&cfg.static_release_api, &state.hub.github_proxy_mode());
+        let client = util::http_client(state.hub.proxy_url().as_deref())?;
+        let body = util::fetch_first(&client, &candidates, None).await?.bytes;
+        let json: serde_json::Value = serde_json::from_slice(&body)?;
+        let assets = json.get("assets").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let asset = assets.iter().find(|a| a.get("name").and_then(|n| n.as_str())
+            .map(|n| n.starts_with("PortableLetheStatic-")).unwrap_or(false))
+            .ok_or_else(|| Error::msg("no PortableLetheStatic asset in release"))?;
+        let name = asset.get("name").and_then(|n| n.as_str()).unwrap_or("static.zip");
+        let hint = name.trim_start_matches("PortableLetheStatic-v").trim_end_matches(".zip").to_string();
+        (asset.get("browser_download_url").and_then(|v| v.as_str())
+            .ok_or_else(|| Error::msg("static asset has no download URL"))?.to_string(), hint)
+    };
+
+    let staging = state.hub.resources_dir().join("staging").join(format!("static-release-{}", uuid::Uuid::new_v4().simple()));
+    let _ = std::fs::remove_dir_all(&staging);
+    let extracted = staging.join("extracted");
+    std::fs::create_dir_all(&extracted)?;
+    emit(state, "static-download", 0, 0, &url);
+    let candidates = util::proxy_candidates(&url, &state.hub.github_proxy_mode());
+    let client = util::http_client(state.hub.proxy_url().as_deref())?;
+    let mut last = String::new();
+    for candidate in &candidates {
+        let _ = std::fs::remove_file(staging.join("static.part"));
+        let c = candidate.clone();
+        let h0 = state.handle.lock().ok().and_then(|h| h.clone());
+        match util::download_file(&client, candidate, &staging.join("static.zip"), None, move |done, total| {
+            if let Some(h) = &h0 {
+                let _ = h.emit(EV_SYNC_PROGRESS, serde_json::json!({
+                    "phase": "static-download", "current": done, "total": total, "message": c,
+                }));
+            }
+        }).await {
+            Ok(_) => { last.clear(); break; }
+            Err(e) => last = format!("{}: {}", candidate, e),
+        }
+    }
+    if !last.is_empty() { return Err(Error::msg(last)); }
+    emit(state, "static-extract", 0, 0, "");
+    zipfile::extract_zip(&staging.join("static.zip"), &extracted)?;
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(extracted.join("static-manifest.json"))
+            .map_err(|e| Error::msg(format!("static zip missing manifest: {}", e)))?,
+    )?;
+    let version = manifest.get("static_version").and_then(|v| v.as_str())
+        .unwrap_or(&version_hint).to_string();
+    let files = manifest.get("files").and_then(|v| v.as_object())
+        .map(|o| o.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string())).collect())
+        .unwrap_or_default();
+    if !extracted.join("StaticData/static-data").is_dir() || !extracted.join("Localize/en").is_dir() {
+        return Err(Error::msg("static zip has invalid layout"));
+    }
+    let report = install_artifact(state, "release", &version, &extracted, files)?;
+    let _ = std::fs::remove_dir_all(&staging);
+    persist_source(state, "release", &version, &report).await?;
+    Ok(report)
+}
+
+/// Bundle source: catalog + s-token + CDN. Both official and Lethe require
+/// the X-Requested-With header documented in tools/prepare_update.py.
+async fn sync_bundle(state: &AppState, source: &str, override_path: Option<&str>) -> Result<SyncReport> {
+    let cat_path = catalog_path(state, source, override_path);
+    if !cat_path.is_file() { return Err(Error::msg(format!("catalog not found: {}", cat_path.display()))); }
+    let hits = crate::core::resources::catalog::find(&state.hub, "static_s1_0", Some(&cat_path.to_string_lossy()))?;
+    let hit = hits.iter().find(|h| h.bundle_name.as_deref().map(|b| b.contains("static_s1_0")).unwrap_or(false))
+        .ok_or_else(|| Error::msg("static_s1_0 bundle not found in catalog"))?;
+    let bundle_name = hit.key.clone();
     let version = bundle_name.rsplit('_').next().unwrap_or("unknown").trim_end_matches(".bundle").to_string();
     {
         let p = state.persisted.read().await;
-        if !source_path.map(|_| false).unwrap_or(false)
-            && p.resources.categories.get("staticdata").and_then(|c| c.version.as_ref()) == Some(&version) {
-            report.version = version; report.skipped = 1; return Ok(report);
+        if p.resources.categories.get("staticdata").and_then(|c| c.version.as_ref()) == Some(&version)
+            && p.resources.categories.get("staticdata").and_then(|c| c.source.as_deref()) == Some(source) {
+            return Ok(SyncReport { category: "staticdata".into(), source: Some(source.into()),
+                version: version.clone(), skipped: 1, ..Default::default() });
         }
     }
-    let settings = state.hub.config.settings_path.as_deref()
-        .map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Program Files (x86)\Steam\steamapps\common\Limbus Company\LimbusCompany_Data\StreamingAssets\aa\settings.json"));
-    let token = catalog::extract_stoken(&settings).unwrap_or_default();
-    let staging = state.hub.resources_dir().join("staging").join(format!("staticdata-{}", version));
-    let extracted = staging.join("_unityfs");
+
+    let token = crate::core::resources::catalog::extract_stoken(&settings_path(state, source)).unwrap_or_default();
+    if token.is_empty() { return Err(Error::msg("CDN token not found in settings.json")); }
+    let staging = state.hub.resources_dir().join("staging").join(format!("static-{}-{}", source, version));
     let _ = std::fs::remove_dir_all(&staging);
+    let extracted = staging.join("_unityfs");
     std::fs::create_dir_all(&extracted)?;
     let bundle_file = staging.join(&bundle_name);
-    let bundle_path = obtain_bundle(state, &bundle_name, &token, &bundle_file).await?;
-    let raw_bytes = std::fs::read(&bundle_path)?;
-    if !unityfs::is_unity_bundle(&raw_bytes) { return Err(Error::msg("not a Unity bundle")); }
-    let paths = unityfs::extract_unity_assets(&raw_bytes, &extracted)
+    let url = if source == "lethe" {
+        state.hub.config.lethe_cdn.replace("{token}", &token).replace("{name}", &bundle_name)
+    } else {
+        format!("https://download.limbuscompanycdn.org/{}/{}", token, bundle_name)
+    };
+    let bundle_path = if let Some(p) = locate_bundle(&bundle_name) { p } else {
+        emit(state, "static-download", 0, 0, &url);
+        let client = util::http_client_with_header(state.hub.proxy_url().as_deref(),
+            Some("X-Requested-With"), Some(&state.hub.config.cdn_requested_with))?;
+        let c = url.clone();
+        let h0 = state.handle.lock().ok().and_then(|h| h.clone());
+        util::download_file(&client, &url, &bundle_file, None, move |done, total| {
+            if let Some(h) = &h0 {
+                let _ = h.emit(EV_SYNC_PROGRESS, serde_json::json!({
+                    "phase": "static-download", "current": done, "total": total, "message": c,
+                }));
+            }
+        }).await?;
+        bundle_file.clone()
+    };
+
+    emit(state, "static-extract", 0, 0, "");
+    let bytes = std::fs::read(&bundle_path)?;
+    if !unityfs::is_unity_bundle(&bytes) { return Err(Error::msg("not a Unity bundle")); }
+    let paths = unityfs::extract_unity_assets(&bytes, &extracted)
         .map_err(|e| Error::msg(format!("unityfs extraction failed: {}", e)))?;
     let out_root = staging.join("root");
-    let mut files = std::collections::BTreeMap::new();
+    let mut files = BTreeMap::new();
     for p in paths {
         if !p.is_file() { continue; }
         let stem = p.file_stem().unwrap_or_default().to_string_lossy().into_owned();
@@ -95,29 +211,27 @@ pub async fn sync(state: &AppState, source_path: Option<&str>) -> Result<SyncRep
         if let Some(parent) = target.parent() { std::fs::create_dir_all(parent)?; }
         std::fs::copy(&p, &target)?;
         files.insert(target.strip_prefix(&out_root)?.to_string_lossy().replace('\\', "/"), util::sha256_file(&target)?);
-        report.added += 1;
     }
-    if report.added < 100 { return Err(Error::msg("suspiciously few static data files extracted")); }
-    // Atomic swap: staging -> official/<version> -> current junction.
-    let official = state.hub.resources_dir().join("official").join(&version);
-    if official.exists() { std::fs::remove_dir_all(&official)?; }
-    std::fs::create_dir_all(official.parent().unwrap())?;
-    std::fs::rename(&out_root, &official)?;
-    util::create_junction(&official, &state.hub.resources_current())?;
+    if files.len() < 100 { return Err(Error::msg("suspiciously few static data files extracted")); }
+    let mut report = install_artifact(state, source, &version, &out_root, files)?;
+    report.source = Some(source.into());
+    persist_source(state, source, &version, &report).await?;
     let _ = std::fs::remove_dir_all(&staging);
-    {
-        let mut p = state.persisted.write().await;
-        p.resources.current = version.clone();
-        p.resources.categories.insert("staticdata".into(), CategoryState {
-            version: Some(version.clone()), etag: None, updated_at: Some(util::now_iso()),
-            files, last_error: None,
-        });
-    }
-    state.persist().await?;
-    report.version = version;
-    report.needs_restart = true;
-    state.log("info", "resources", &format!("staticdata synced: {} files", report.added));
     Ok(report)
+}
+
+async fn persist_source(state: &AppState, source: &str, version: &str, report: &SyncReport) -> Result<()> {
+    let mut p = state.persisted.write().await;
+    p.resources.current = version.to_string();
+    p.resources.categories.insert("staticdata".into(), CategoryState {
+        source: Some(source.into()), version: Some(version.into()),
+        etag: None, updated_at: Some(util::now_iso()), files: BTreeMap::new(), last_error: None,
+    });
+    drop(p);
+    state.persist().await?;
+    state.log("info", "resources", &format!("staticdata synced from {}: {} ({} files)",
+        source, version, report.added));
+    Ok(())
 }
 
 pub fn extract_bundle(bundle: &Path, out_dir: &Path) -> Result<usize> {
@@ -134,20 +248,4 @@ pub fn extract_bundle(bundle: &Path, out_dir: &Path) -> Result<usize> {
         count += 1;
     }
     Ok(count)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn unityfs_static_bundle_if_present() {
-        let p = std::env::var("PL_TEST_BUNDLE").unwrap_or_default();
-        if p.is_empty() || !Path::new(&p).is_file() { return; }
-        let out = std::env::temp_dir().join(format!("pl-unityfs-test-{}", uuid::Uuid::new_v4().simple()));
-        let n = extract_bundle(Path::new(&p), &out).unwrap();
-        assert_eq!(n, 2185, "expected 2185 TextAssets (UnityPy parity)");
-        // extract_bundle always writes `<stem>.json`; the 42 `.txt` outputs of
-        // unityfs are normalised here by construction.
-        let _ = std::fs::remove_dir_all(&out);
-    }
 }

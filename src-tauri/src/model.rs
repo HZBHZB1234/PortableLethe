@@ -12,6 +12,18 @@ pub struct HubConfig {
     /// uses `github_proxy` (auto | none | gh-proxy.org | gh-proxy.com).
     pub gh_proxy_prefix: String,
     pub github_proxy: String,
+    /// Static resource source: release | official | lethe.
+    pub static_source: String,
+    /// Release API used to discover standalone static zip assets.
+    pub static_release_api: String,
+    /// Explicit static zip URL; overrides Release API discovery.
+    pub static_zip_url: Option<String>,
+    /// Lethe installation dir used for its catalog/settings extraction.
+    pub lethe_dir: Option<String>,
+    /// Bundle CDN template; `{token}` and `{name}` are expanded.
+    pub lethe_cdn: String,
+    /// X-Requested-With header required by both bundle CDNs.
+    pub cdn_requested_with: String,
     pub release_api: String,
     pub zip_url: Option<String>,
     pub expected_sha256: Option<String>,
@@ -37,6 +49,12 @@ impl Default for HubConfig {
             data_dir: None,
             gh_proxy_prefix: String::new(),
             github_proxy: "auto".into(),
+            static_source: "release".into(),
+            static_release_api: "https://api.github.com/repos/HZBHZB1234/PortableOpenLethe/releases/latest".into(),
+            static_zip_url: None,
+            lethe_dir: None,
+            lethe_cdn: "https://assets.lethelc.site/{token}/{name}".into(),
+            cdn_requested_with: "this_is_header_value".into(),
             release_api: "https://api.github.com/repos/HZBHZB1234/PortableOpenLethe/releases/latest".into(),
             zip_url: None, expected_sha256: None, keep_versions: 3,
             port_range_start: 5180, port_range_end: 5280,
@@ -50,6 +68,7 @@ impl Default for HubConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CategoryState {
+    pub source: Option<String>,
     pub version: Option<String>,
     pub etag: Option<String>,
     pub updated_at: Option<String>,
@@ -137,6 +156,7 @@ pub struct VersionInfo {
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct SyncReport {
     pub category: String,
+    pub source: Option<String>,
     pub version: String,
     pub added: usize,
     pub changed: usize,

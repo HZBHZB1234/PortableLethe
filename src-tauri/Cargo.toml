@@ -1,6 +1,6 @@
 [package]
 name = "portable-lethe-hub"
-version = "0.1.0"
+version = "0.1.1"
 description = "Portable Lethe Hub - Tauri 2 desktop control center (pure Rust core)"
 authors = ["PortableLethe"]
 edition = "2021"
@@ -56,3 +56,4 @@ js-sys = { path = "../patches/js-sys" }
 web-sys = { path = "../patches/web-sys" }
 wasm-bindgen-futures = { path = "../patches/wasm-bindgen-futures" }
 wasm-streams = { path = "../patches/wasm-streams" }
+

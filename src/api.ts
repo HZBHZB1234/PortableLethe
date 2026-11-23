@@ -35,8 +35,8 @@ export const api = {
   versionRollback: () => invoke<VersionInfo>('version_rollback'),
 
   resourceStatus: () => invoke<ResourceStatus>('resource_status'),
-  resourceSync: (category: string, sourcePath?: string | null, force = false) =>
-    invoke<SyncReport>('resource_sync', { category, sourcePath: sourcePath ?? null, force }),
+  resourceSync: (category: string, source?: string | null, sourcePath?: string | null, force = false) =>
+    invoke<SyncReport>('resource_sync', { category, source: source ?? null, sourcePath: sourcePath ?? null, force }),
 
   clientpkgExport: (instanceId: string, output?: string | null) =>
     invoke<ClientPkgResult>('clientpkg_export', { instanceId, output: output ?? null }),
@@ -53,6 +53,11 @@ export const isTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS
 
 export const exampleHubConfig: HubConfig = {
   data_dir: null, gh_proxy_prefix: '', github_proxy: 'auto',
+  static_source: 'release',
+  static_release_api: 'https://api.github.com/repos/HZBHZB1234/PortableOpenLethe/releases/latest',
+  static_zip_url: null, lethe_dir: null,
+  lethe_cdn: 'https://assets.lethelc.site/{token}/{name}',
+  cdn_requested_with: 'this_is_header_value',
   release_api: 'https://api.github.com/repos/HZBHZB1234/PortableOpenLethe/releases/latest',
   zip_url: null, expected_sha256: null, keep_versions: 3,
   port_range_start: 5180, port_range_end: 5280, health_timeout_ms: 30000,

@@ -195,6 +195,18 @@ export function ConfigPage({ act, busy }: Props) {
           <input value={hubSettings?.release_api ?? ''} readOnly />
           <span className="hint">此地址随 Hub 分发，如需更换请编辑 hub-config.json。</span>
         </label>
+        <label className="field">默认静态数据来源
+          <select value={hubSettings?.static_source || 'release'} disabled={busy} onChange={(e) => void act('保存 Hub 设置', async () => {
+            const r = await api.hubConfigUpdate({ static_source: e.target.value });
+            setHubSettings(r);
+            return r;
+          })}>
+            <option value="release">release 预置快照</option>
+            <option value="official">官服 CDN</option>
+            <option value="lethe">私服 CDN（Lethe）</option>
+          </select>
+          <span className="hint">安装服务端后自动按该来源准备静态数据。</span>
+        </label>
       </div>
     </Section>
     <Section title="目标实例" desc={`配置来源: ${schema?.source ?? '—'}`}>
@@ -228,10 +240,19 @@ export function ConfigPage({ act, busy }: Props) {
 
 export function ResourcesPage({ status, act, busy }: Props) {
   const [source, setSource] = useState('');
+  const [staticSource, setStaticSource] = useState('release');
+  useEffect(() => { void api.hubSettingsGet().then((s) => setStaticSource(s.static_source || 'release')).catch(() => undefined); }, []);
   const categories = ['modfiles', 'staticdata', 'bundles'];
   return <div className="stack">
-    <Section title="同步源" desc="留空则使用 Hub 配置中的 catalog 路径与官方源">
-      <input style={{ width: 'min(100%, 560px)' }} placeholder="本地 catalog.bin / bundle 路径（可选）" value={source} onChange={(e) => setSource(e.target.value)} />
+    <Section title="静态数据来源" desc="release=随服务端发布的快照（默认）；official=官服 CDN；lethe=私服 CDN">
+      <div className="row">
+        <select value={staticSource} onChange={(e) => setStaticSource(e.target.value)}>
+          <option value="release">release 预置快照</option>
+          <option value="official">官服（Project Moon CDN）</option>
+          <option value="lethe">私服（Lethe CDN）</option>
+        </select>
+        <input style={{ width: 'min(100%, 420px)' }} placeholder="本地 catalog.bin 路径（可选，仅 bundle 来源）" value={source} onChange={(e) => setSource(e.target.value)} />
+      </div>
     </Section>
     <div className="grid cols-3">
       {categories.map((c) => {
@@ -240,14 +261,14 @@ export function ResourcesPage({ status, act, busy }: Props) {
           <div className="card-head"><div><h2>{c}</h2><p>{st?.version ?? '未同步'}</p></div>
             {st?.last_error ? <span className="tag error">异常</span> : <span className="tag ok">就绪</span>}
           </div>
-          <p className="muted">文件数: {st ? Object.keys(st.files ?? {}).length : 0}<br />更新: {st?.updated_at ?? '—'}</p>
+          <p className="muted">来源: {st?.source ?? '—'}<br />文件数: {st ? Object.keys(st.files ?? {}).length : 0}<br />更新: {st?.updated_at ?? '—'}</p>
           {st?.last_error && <p className="notice error" style={{ marginTop: 8 }}>{st.last_error}</p>}
-          <button className="btn ghost sm" style={{ marginTop: 12 }} disabled={busy} onClick={() => void act(`同步 ${c}`, () => api.resourceSync(c, source || null))}>立即同步</button>
+          <button className="btn ghost sm" style={{ marginTop: 12 }} disabled={busy} onClick={() => void act(`同步 ${c}`, () => api.resourceSync(c, c === 'staticdata' ? staticSource : null, source || null))}>立即同步</button>
         </section>;
       })}
     </div>
     <Section title="全部同步" desc="modfiles 立即生效；staticdata / bundles 更新后需重启实例">
-      <button className="btn" disabled={busy} onClick={() => void act('同步全部资源', () => api.resourceSync('all', source || null))}>同步全部（原子切换）</button>
+      <button className="btn" disabled={busy} onClick={() => void act('同步全部资源', () => api.resourceSync('all', staticSource, source || null))}>同步全部（原子切换）</button>
     </Section>
   </div>;
 }

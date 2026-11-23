@@ -157,8 +157,10 @@ pub async fn resource_status(state: State<'_, AppState>) -> CResult<ResourceStat
 }
 
 #[tauri::command]
-pub async fn resource_sync(state: State<'_, AppState>, category: String, source_path: Option<String>, force: Option<bool>) -> CResult<SyncReport> {
-    core::resources::sync(&state, &category, source_path.as_deref(), force.unwrap_or(false)).await.map_err(err)
+pub async fn resource_sync(state: State<'_, AppState>, category: String, source: Option<String>,
+                           source_path: Option<String>, force: Option<bool>) -> CResult<SyncReport> {
+    let src = source.filter(|s| !s.is_empty()).unwrap_or_else(|| state.hub.default_static_source());
+    core::resources::sync(&state, &category, &src, source_path.as_deref(), force.unwrap_or(false)).await.map_err(err)
 }
 
 #[tauri::command]

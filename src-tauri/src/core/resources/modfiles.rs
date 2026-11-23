@@ -49,14 +49,12 @@ pub async fn sync(state: &AppState, force: bool) -> Result<SyncReport> {
         if let Some(e) = fetched.etag { etags.insert((*name).to_string(), e); }
     }
     let version = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
-    let official = state.hub.resources_dir().join("official").join(&version).join("modfiles");
-    std::fs::create_dir_all(official.parent().unwrap())?;
+    let object_dir = state.hub.resources_objects().join("modfiles").join(&version);
+    std::fs::create_dir_all(object_dir.parent().unwrap())?;
+    let official = object_dir.join("modfiles");
     std::fs::rename(&staging, &official)?;
-    // Ensure `current` points at this version's root (staticdata may have its own junction).
-    let current = state.hub.resources_current();
-    if !current.symlink_metadata().is_ok() {
-        util::create_junction(official.parent().unwrap(), &current)?;
-    }
+    // Only this category's junction changes; staticdata is unaffected.
+    super::set_category(state, "modfiles", &official)?;
     // Immediate effect: copy into every instance's MOD_FILES_DIR.
     let ids: Vec<String> = state.persisted.read().await.instances.iter().map(|i| i.id.clone()).collect();
     for id in ids {
@@ -70,7 +68,7 @@ pub async fn sync(state: &AppState, force: bool) -> Result<SyncReport> {
     {
         let mut p = state.persisted.write().await;
         p.resources.categories.insert("modfiles".into(), CategoryState {
-            version: Some(version.clone()),
+            source: Some("official".into()), version: Some(version.clone()),
             etag: Some(serde_json::to_string(&etags).unwrap_or_default()),
             updated_at: Some(util::now_iso()), files, last_error: None,
         });

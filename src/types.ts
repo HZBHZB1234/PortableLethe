@@ -7,6 +7,12 @@ export interface HubConfig {
   data_dir: string | null;
   gh_proxy_prefix: string;
   github_proxy: 'auto' | 'none' | 'gh-proxy.org' | 'gh-proxy.com' | string;
+  static_source: 'release' | 'official' | 'lethe' | string;
+  static_release_api: string;
+  static_zip_url: string | null;
+  lethe_dir: string | null;
+  lethe_cdn: string;
+  cdn_requested_with: string;
   release_api: string;
   zip_url: string | null;
   expected_sha256: string | null;
@@ -32,6 +38,7 @@ export interface DepReport {
 }
 
 export interface CategoryState {
+  source: string | null;
   version: string | null;
   etag: string | null;
   updated_at: string | null;
@@ -95,6 +102,7 @@ export interface VersionInfo {
 
 export interface SyncReport {
   category: string;
+  source: string | null;
   version: string;
   added: number;
   changed: number;

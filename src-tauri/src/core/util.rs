@@ -71,9 +71,25 @@ pub fn dir_size(path: &Path) -> u64 {
 }
 
 pub fn http_client(proxy: Option<&str>) -> Result<reqwest::Client> {
+    http_client_with_header(proxy, None, None)
+}
+
+/// HTTP client with an optional default header. Both the official and Lethe
+/// bundle CDNs reject requests without X-Requested-With.
+pub fn http_client_with_header(proxy: Option<&str>, header: Option<&str>, value: Option<&str>) -> Result<reqwest::Client> {
     let mut b = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
         .user_agent(concat!("PortableLetheHub/", env!("CARGO_PKG_VERSION")));
+    if let (Some(k), Some(v)) = (header, value) {
+        use reqwest::header::{HeaderName, HeaderValue};
+        if let (Ok(name), Ok(val)) = (
+            HeaderName::from_bytes(k.as_bytes()), HeaderValue::from_str(v),
+        ) {
+            let mut map = reqwest::header::HeaderMap::new();
+            map.insert(name, val);
+            b = b.default_headers(map);
+        }
+    }
     if let Some(p) = proxy.filter(|s| !s.is_empty()) {
         b = b.proxy(reqwest::Proxy::all(p)?);
     }

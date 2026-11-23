@@ -67,6 +67,9 @@ impl Hub {
     pub fn staging_dir(&self) -> PathBuf { self.versions_dir().join(".staging") }
     pub fn resources_dir(&self) -> PathBuf { self.root.join("resources") }
     pub fn resources_current(&self) -> PathBuf { self.resources_dir().join("current") }
+    /// Stable real directory whose children are per-category junctions.
+    pub fn resources_active(&self) -> PathBuf { self.resources_dir().join("active") }
+    pub fn resources_objects(&self) -> PathBuf { self.resources_dir().join("objects") }
     pub fn instances_dir(&self) -> PathBuf { self.root.join("instances") }
     pub fn clientpkg_dir(&self) -> PathBuf { self.root.join("clientpkg") }
     pub fn logs_dir(&self) -> PathBuf { self.root.join("logs") }
@@ -99,6 +102,18 @@ impl Hub {
     pub fn proxy_url(&self) -> Option<String> {
         let raw = self.config.proxy.as_deref().unwrap_or("");
         if raw.is_empty() { None } else { Some(raw.to_string()) }
+    }
+
+    /// Read the default static source from disk so UI changes apply immediately.
+    pub fn default_static_source(&self) -> String {
+        if let Ok(text) = std::fs::read_to_string(self.config_path()) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let Some(s) = v.get("static_source").and_then(|x| x.as_str()) {
+                    return s.to_string();
+                }
+            }
+        }
+        self.config.static_source.clone()
     }
 
     /// Read the GitHub proxy choice from disk on every request so changing it

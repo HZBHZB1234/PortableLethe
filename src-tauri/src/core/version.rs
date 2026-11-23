@@ -130,6 +130,17 @@ pub async fn install(state: &AppState, url: Option<&str>, version: Option<&str>,
     state.persist().await?;
     let _ = std::fs::remove_dir_all(&staging);
     state.log("info", "version", &format!("installed {} ({} files)", name, files));
+    // Decoupled resources: prepare static data on first install using the
+    // configured source. Failure is non-fatal - the Resources page can retry.
+    let has_static = state.hub.resources_active().join("StaticData").symlink_metadata().is_ok()
+        || state.hub.resources_current().join("StaticData").is_dir();
+    if !has_static {
+        let src = state.hub.default_static_source();
+        state.log("info", "version", &format!("preparing static data from {}", src));
+        if let Err(e) = crate::core::resources::sync(state, "staticdata", &src, None, false).await {
+            state.log("warn", "version", &format!("static bootstrap failed: {}", e));
+        }
+    }
     Ok(info)
 }
 
