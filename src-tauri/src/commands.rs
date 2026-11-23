@@ -47,6 +47,15 @@ pub async fn hub_status(state: State<'_, AppState>) -> CResult<HubStatus> {
 }
 
 #[tauri::command]
+pub async fn hub_settings_get(state: State<'_, AppState>) -> CResult<HubConfig> {
+    // Always read from disk: settings saved via the UI are written there and
+    // must be visible immediately, without restarting the Hub process.
+    let path = state.hub.config_path();
+    let text = std::fs::read_to_string(path).map_err(err)?;
+    serde_json::from_str(&text).map_err(err)
+}
+
+#[tauri::command]
 pub async fn hub_config_schema(state: State<'_, AppState>) -> CResult<ConfigSchema> {
     Ok(core::config::schema(&state.hub))
 }

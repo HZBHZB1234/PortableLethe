@@ -8,7 +8,10 @@ pub type JsonMap = BTreeMap<String, serde_json::Value>;
 #[serde(default)]
 pub struct HubConfig {
     pub data_dir: Option<String>,
+    /// Legacy explicit proxy prefix. Kept for hand-edited configs; the UI now
+    /// uses `github_proxy` (auto | none | gh-proxy.org | gh-proxy.com).
     pub gh_proxy_prefix: String,
+    pub github_proxy: String,
     pub release_api: String,
     pub zip_url: Option<String>,
     pub expected_sha256: Option<String>,
@@ -32,7 +35,8 @@ impl Default for HubConfig {
     fn default() -> Self {
         Self {
             data_dir: None,
-            gh_proxy_prefix: "https://gh-proxy.com/".into(),
+            gh_proxy_prefix: String::new(),
+            github_proxy: "auto".into(),
             release_api: "https://api.github.com/repos/HZBHZB1234/PortableOpenLethe/releases/latest".into(),
             zip_url: None, expected_sha256: None, keep_versions: 3,
             port_range_start: 5180, port_range_end: 5280,

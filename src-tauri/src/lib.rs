@@ -40,6 +40,7 @@ pub fn run() {
             commands::hub_status,
             commands::hub_reveal_dir,
             commands::hub_ensure_deps,
+            commands::hub_settings_get,
             commands::hub_config_schema,
             commands::hub_config_get,
             commands::hub_config_set,

@@ -22,19 +22,18 @@ async fn resolve_download(state: &AppState, url: Option<&str>, version: Option<&
             Path::new(u).file_name().map(|n| n.to_string_lossy().trim_end_matches(".zip").to_string())
                 .unwrap_or_else(|| "manual".into())
         });
-        return Ok((name, util::proxied_github_url(u, &state.hub.config.gh_proxy_prefix), state.hub.config.expected_sha256.clone()));
+        return Ok((name, u.to_string(), state.hub.config.expected_sha256.clone()));
     }
     if let Some(u) = state.hub.config.zip_url.as_deref().filter(|s| !s.is_empty()) {
         let name = version.map(str::to_string).unwrap_or_else(|| "prebuilt".into());
-        return Ok((name, util::proxied_github_url(u, &state.hub.config.gh_proxy_prefix), state.hub.config.expected_sha256.clone()));
+        return Ok((name, u.to_string(), state.hub.config.expected_sha256.clone()));
     }
-    let api = util::proxied_github_url(&state.hub.config.release_api, &state.hub.config.gh_proxy_prefix);
+    let api_candidates = util::proxy_candidates(&state.hub.config.release_api, &state.hub.github_proxy_mode());
     let client = util::http_client(state.hub.proxy_url().as_deref())?;
-    let body = util::fetch(&client, &api, None).await?.bytes;
+    let body = util::fetch_first(&client, &api_candidates, None).await?.bytes;
     let json: serde_json::Value = serde_json::from_slice(&body)?;
     let (tag, asset_url) = asset_from_release(&json)?;
-    Ok((version.map(str::to_string).unwrap_or(tag),
-        util::proxied_github_url(&asset_url, &state.hub.config.gh_proxy_prefix),
+    Ok((version.map(str::to_string).unwrap_or(tag), asset_url,
         state.hub.config.expected_sha256.clone()))
 }
 
@@ -66,19 +65,36 @@ pub async fn install(state: &AppState, url: Option<&str>, version: Option<&str>,
     let staging = state.hub.staging_dir().join(format!("{}.tmp-{}", name, uuid::Uuid::new_v4().simple()));
     let extracted = staging.join("extracted");
     std::fs::create_dir_all(&extracted)?;
-    state.log("info", "version", &format!("downloading {} -> {}", url, staging.display()));
+    let mode = state.hub.github_proxy_mode();
+    let candidates = util::proxy_candidates(&url, &mode);
+    state.log("info", "version", &format!("downloading {} -> {} (proxy={}, {} candidate(s))",
+        url, staging.display(), mode, candidates.len()));
     let client = util::http_client(state.hub.proxy_url().as_deref())?;
     let zip_path = staging.join("release.zip");
     let handle = state.handle.lock().ok().and_then(|h| h.clone());
-    let url_for_event = url.clone();
-    let sha = util::download_file(&client, &url, &zip_path, sha256.or(expected.as_deref()), move |done, total| {
-        if let Some(h) = &handle {
-            let _ = h.emit(EV_DOWNLOAD_PROGRESS, serde_json::json!({
-                "url": url_for_event, "downloaded": done, "total": total,
-            }));
+    let mut last_err = "no candidate".to_string();
+    let mut sha = String::new();
+    for candidate in &candidates {
+        // Never resume a partial file from a different proxy/source.
+        let _ = std::fs::remove_file(zip_path.with_extension("part"));
+        let url_for_event = candidate.clone();
+        let h = handle.clone();
+        match util::download_file(&client, candidate, &zip_path, sha256.or(expected.as_deref()), move |done, total| {
+            if let Some(h) = &h {
+                let _ = h.emit(EV_DOWNLOAD_PROGRESS, serde_json::json!({
+                    "url": url_for_event, "downloaded": done, "total": total,
+                }));
+            }
+        }).await {
+            Ok(digest) => { sha = digest; break; }
+            Err(e) => {
+                last_err = format!("{}: {}", candidate, e);
+                state.log("warn", "version", &format!("download via {} failed: {}", candidate, e));
+            }
         }
-    }).await?;
-    state.log("info", "version", &format!("download complete: {}", name));
+    }
+    if sha.is_empty() { return Err(Error::msg(format!("download failed: {}", last_err))); }
+    state.log("info", "version", &format!("download complete: {} sha256={}", name, sha));
     let count = zipfile::extract_zip(&zip_path, &extracted)
         .map_err(|e| { state.log("error", "version", &format!("extract failed: {}", e)); e })?;
     state.log("info", "version", &format!("extracted {} files", count));
@@ -181,7 +197,7 @@ pub async fn build_from_source(
     let raw = repo_url.filter(|s| !s.is_empty()).map(str::to_string)
         .or_else(|| state.hub.config.source_repo_url.clone())
         .ok_or_else(|| Error::msg("source_repo_url is not configured"))?;
-    let url = util::proxied_github_url(&raw, &state.hub.config.gh_proxy_prefix);
+    let clone_candidates = util::proxy_candidates(&raw, &state.hub.github_proxy_mode());
 
     let tools = state.hub.tools_dir();
     std::fs::create_dir_all(&tools)?;
@@ -211,16 +227,18 @@ pub async fn build_from_source(
     let staging = state.hub.staging_dir().join(format!("source-{}", uuid::Uuid::new_v4().simple()));
     std::fs::create_dir_all(&staging)?;
     let repo = staging.join("repo");
-    let clone_url = url.clone();
     let clone_target = repo.clone();
     tokio::task::spawn_blocking(move || -> Result<()> {
-        let out = std::process::Command::new("git")
-            .args(["clone", "--depth", "1", &clone_url])
-            .arg(&clone_target).output()?;
-        if !out.status.success() {
-            return Err(Error::msg(String::from_utf8_lossy(&out.stderr).into_owned()));
+        let mut last = String::new();
+        for clone_url in &clone_candidates {
+            let _ = std::fs::remove_dir_all(&clone_target);
+            let out = std::process::Command::new("git")
+                .args(["clone", "--depth", "1", clone_url])
+                .arg(&clone_target).output()?;
+            if out.status.success() { return Ok(()); }
+            last = format!("{}: {}", clone_url, String::from_utf8_lossy(&out.stderr));
         }
-        Ok(())
+        Err(Error::msg(format!("git clone failed: {}", last)))
     }).await.map_err(|e| Error::msg(e.to_string()))??;
 
     let publish_dir = staging.join("publish");
@@ -257,7 +275,7 @@ pub async fn build_from_source(
     let info = VersionInfo {
         name: name.clone(), path: target.to_string_lossy().into_owned(),
         installed_at: util::now_iso(), size_bytes: util::dir_size(&target),
-        is_current: false, source: format!("source:{}", url),
+        is_current: false, source: format!("source:{}", raw),
     };
     {
         let mut p = state.persisted.write().await;

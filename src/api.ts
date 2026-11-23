@@ -10,10 +10,12 @@ export const api = {
   hubStatus: () => invoke<HubStatus>('hub_status'),
   hubRevealDir: () => invoke<boolean>('hub_reveal_dir'),
   hubEnsureDeps: (instanceId?: string | null) => invoke<DepReport>('hub_ensure_deps', { instanceId: instanceId ?? null }),
+  hubSettingsGet: () => invoke<HubConfig>('hub_settings_get'),
   hubConfigSchema: () => invoke<ConfigSchema>('hub_config_schema'),
   hubConfigGet: (instanceId: string) => invoke<Record<string, unknown>>('hub_config_get', { instanceId }),
   hubConfigSet: (instanceId: string, values: Record<string, unknown>) =>
     invoke<Record<string, unknown>>('hub_config_set', { instanceId, values }),
+  hubConfigUpdate: (values: Partial<HubConfig>) => invoke<HubConfig>('hub_config_update', { values }),
 
   instanceList: () => invoke<InstanceInfo[]>('instance_list'),
   instanceCreate: (name: string, version?: string | null, port?: number | null) =>
@@ -50,7 +52,7 @@ export const onEvent = <T>(event: string, cb: (payload: T) => void) =>
 export const isTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 export const exampleHubConfig: HubConfig = {
-  data_dir: null, gh_proxy_prefix: 'https://gh-proxy.com/',
+  data_dir: null, gh_proxy_prefix: '', github_proxy: 'auto',
   release_api: 'https://api.github.com/repos/HZBHZB1234/PortableOpenLethe/releases/latest',
   zip_url: null, expected_sha256: null, keep_versions: 3,
   port_range_start: 5180, port_range_end: 5280, health_timeout_ms: 30000,

@@ -80,11 +80,47 @@ pub fn http_client(proxy: Option<&str>) -> Result<reqwest::Client> {
     Ok(b.build()?)
 }
 
-/// Build a GitHub download URL with the configured gh-proxy prefix (doc 04 §7).
+/// Wrap a GitHub URL with a gh-proxy prefix. The separator slash matters:
+/// `https://gh-proxy.com` + `https://api.github.com/...` used to become
+/// `https://gh-proxy.comhttps://api.github.com/...`.
 pub fn proxied_github_url(url: &str, prefix: &str) -> String {
+    if prefix.trim().is_empty() { return url.to_string(); }
     if url.contains("github.com") || url.contains("objects.githubusercontent.com") {
-        format!("{}{}", prefix.trim_end_matches('/'), url)
+        format!("{}/{}", prefix.trim_end_matches('/'), url.trim_start_matches('/'))
     } else { url.to_string() }
+}
+
+/// Candidate URLs in preference order. "auto" prefers direct for API calls
+/// (they are usually reachable) and gh-proxy.org for release assets, then
+/// falls back to the other sources. Direct is always the last resort.
+pub fn proxy_candidates(url: &str, mode: &str) -> Vec<String> {
+    let is_gh = url.contains("github.com") || url.contains("objects.githubusercontent.com");
+    if !is_gh { return vec![url.to_string()]; }
+    let org = "https://gh-proxy.org";
+    let com = "https://gh-proxy.com";
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "none" | "direct" | "" => vec![url.to_string()],
+        "org" | "gh-proxy.org" => vec![proxied_github_url(url, org), url.to_string()],
+        "com" | "gh-proxy.com" => vec![proxied_github_url(url, com), url.to_string()],
+        // legacy explicit prefix stored in hand-edited configs
+        m if m.starts_with("http://") || m.starts_with("https://") =>
+            vec![proxied_github_url(url, m), url.to_string()],
+        _ if url.contains("api.github.com") =>
+            vec![url.to_string(), proxied_github_url(url, org), proxied_github_url(url, com)],
+        _ => vec![proxied_github_url(url, org), proxied_github_url(url, com), url.to_string()],
+    }
+}
+
+/// Fetch the first candidate that answers successfully.
+pub async fn fetch_first(client: &reqwest::Client, urls: &[String], etag: Option<&str>) -> Result<Fetched> {
+    let mut last = "no proxy candidate".to_string();
+    for u in urls {
+        match fetch(client, u, etag).await {
+            Ok(f) => return Ok(f),
+            Err(e) => { last = format!("{}: {}", u, e); }
+        }
+    }
+    Err(Error::msg(last))
 }
 
 pub struct Fetched {
@@ -219,4 +255,23 @@ pub fn copy_tree(src: &Path, dst: &Path) -> Result<u64> {
         }
     }
     Ok(total)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn proxy_prefix_has_separator() {
+        let u = "https://api.github.com/repos/x/y/releases/latest";
+        assert_eq!(proxied_github_url(u, "https://gh-proxy.com/"),
+            "https://gh-proxy.com/https://api.github.com/repos/x/y/releases/latest");
+    }
+    #[test]
+    fn auto_candidates_order() {
+        let api = proxy_candidates("https://api.github.com/x", "auto");
+        assert_eq!(api[0], "https://api.github.com/x");
+        let asset = proxy_candidates("https://github.com/x/y/releases/download/z.zip", "auto");
+        assert!(asset[0].starts_with("https://gh-proxy.org/"));
+        assert_eq!(proxy_candidates("https://example.com/a", "auto"), vec!["https://example.com/a"]);
+    }
 }

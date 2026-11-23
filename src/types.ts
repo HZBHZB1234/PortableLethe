@@ -6,6 +6,7 @@ export type InstanceState = 'Stopped' | 'Starting' | 'Running' | 'Unhealthy' | '
 export interface HubConfig {
   data_dir: string | null;
   gh_proxy_prefix: string;
+  github_proxy: 'auto' | 'none' | 'gh-proxy.org' | 'gh-proxy.com' | string;
   release_api: string;
   zip_url: string | null;
   expected_sha256: string | null;

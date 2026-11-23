@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from './api';
 import type {
-  ConfigField, ConfigSchema, HubStatus, InstanceInfo, LogLine, VersionInfo,
+  ConfigField, ConfigSchema, HubConfig, HubStatus, InstanceInfo, LogLine, VersionInfo,
 } from './types';
 
 type Act = (label: string, fn: () => Promise<unknown>) => Promise<unknown>;
@@ -153,12 +153,14 @@ export function InstancesPage({ act, busy }: Props) {
 }
 
 export function ConfigPage({ act, busy }: Props) {
+  const [hubSettings, setHubSettings] = useState<HubConfig | null>(null);
   const [schema, setSchema] = useState<ConfigSchema | null>(null);
   const [instances, setInstances] = useState<InstanceInfo[]>([]);
   const [selected, setSelected] = useState('');
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [dirty, setDirty] = useState(false);
   useEffect(() => {
+    void api.hubSettingsGet().then(setHubSettings).catch(() => undefined);
     void Promise.all([api.hubConfigSchema(), api.instanceList()]).then(([s, is]) => {
       setSchema(s); setInstances(is); setSelected((old) => old || is[0]?.id || '');
     }).catch(() => undefined);
@@ -172,7 +174,29 @@ export function ConfigPage({ act, busy }: Props) {
     setValues((prev) => ({ ...prev, [f.key]: f.kind === 'number' ? Number(v) : f.kind === 'boolean' ? v === 'true' : v }));
     setDirty(true);
   };
+  const proxyMode = hubSettings?.github_proxy || 'auto';
   return <div className="stack">
+    <Section title="GitHub 代理" desc="下载 Release / 同步资源时使用的代理源；修改后立即生效">
+      <div className="form-grid">
+        <label className="field">代理源
+          <select value={proxyMode} disabled={busy} onChange={(e) => void act('保存 Hub 设置', async () => {
+            const r = await api.hubConfigUpdate({ github_proxy: e.target.value });
+            setHubSettings(r);
+            return r;
+          })}>
+            <option value="auto">自适应（推荐）</option>
+            <option value="none">不走代理</option>
+            <option value="gh-proxy.org">gh-proxy.org</option>
+            <option value="gh-proxy.com">gh-proxy.com</option>
+          </select>
+          <span className="hint">自适应：API 请求优先直连，Release 资源优先 gh-proxy.org，失败自动切换 gh-proxy.com，最后回退直连。</span>
+        </label>
+        <label className="field">Release API
+          <input value={hubSettings?.release_api ?? ''} readOnly />
+          <span className="hint">此地址随 Hub 分发，如需更换请编辑 hub-config.json。</span>
+        </label>
+      </div>
+    </Section>
     <Section title="目标实例" desc={`配置来源: ${schema?.source ?? '—'}`}>
       <div className="row">
         <select value={selected} onChange={(e) => setSelected(e.target.value)}>

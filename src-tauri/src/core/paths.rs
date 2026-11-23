@@ -36,6 +36,13 @@ impl Hub {
             let mut merged = defaults.as_object().cloned().unwrap_or_default();
             if let Some(obj) = raw.as_object() {
                 for (k, v) in obj { merged.insert(k.clone(), v.clone()); }
+                // Migrate pre-settings configs that hardcoded the broken prefix.
+                if !obj.contains_key("github_proxy")
+                    && obj.get("gh_proxy_prefix").and_then(|v| v.as_str())
+                        .map(|s| s.contains("gh-proxy.com")).unwrap_or(false) {
+                    merged.insert("github_proxy".into(), serde_json::json!("auto"));
+                    merged.insert("gh_proxy_prefix".into(), serde_json::json!(""));
+                }
             }
             serde_json::from_value(serde_json::Value::Object(merged))?
         } else { HubConfig::default() };
@@ -92,6 +99,27 @@ impl Hub {
     pub fn proxy_url(&self) -> Option<String> {
         let raw = self.config.proxy.as_deref().unwrap_or("");
         if raw.is_empty() { None } else { Some(raw.to_string()) }
+    }
+
+    /// Read the GitHub proxy choice from disk on every request so changing it
+    /// in the settings UI takes effect immediately (no Hub restart).
+    pub fn github_proxy_mode(&self) -> String {
+        if let Ok(text) = std::fs::read_to_string(self.config_path()) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let Some(m) = v.get("github_proxy").and_then(|x| x.as_str()) {
+                    return m.to_string();
+                }
+                if v.get("gh_proxy_prefix").and_then(|x| x.as_str())
+                    .map(|s| s.contains("gh-proxy.com")).unwrap_or(false) {
+                    return "auto".into();
+                }
+            }
+        }
+        if self.config.github_proxy.trim().is_empty() {
+            self.config.gh_proxy_prefix.clone()
+        } else {
+            self.config.github_proxy.clone()
+        }
     }
 }
 
