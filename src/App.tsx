@@ -97,7 +97,7 @@ export default function App() {
     } catch (e) {
       toast(`${label} 失败: ${String(e)}`, 'error');
       return undefined;
-    } finally { setBusy(false); }
+    } finally { setBusy(false); setProgress(null); }
   };
 
   const current = NAV.find((n) => n.key === page)!;
@@ -141,7 +141,7 @@ export default function App() {
         {progress && <div className="banner"><div className="banner-inner">
           <div className="card">
             <div className="row" style={{ justifyContent: 'space-between' }}>
-              <span className="subtle">{[progress.phase, progress.message].filter(Boolean).join(' · ')}</span>
+              <span className="subtle">{[progress.phase || 'download', progress.message].filter(Boolean).join(' · ')}</span>
               <span className="muted num">{progress.current}/{progress.total}</span>
             </div>
             {pct !== null && <div className="progress-wrap" style={{ marginTop: 8 }}><div className="progress-bar" style={{ width: `${pct}%` }} /></div>}

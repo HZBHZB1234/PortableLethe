@@ -42,10 +42,13 @@ pub fn extract_zip(path: &Path, out_dir: &Path) -> Result<usize> {
         let comment_len = u16le(&data, pos + 32)? as usize;
         let name = String::from_utf8_lossy(data.get(pos+46..pos+46+name_len)
             .ok_or_else(|| Error::msg("zip central header truncated"))?).to_string();
+        // Trailing slash is the reliable directory marker; external attributes
+        // differ between zip producers (PowerShell vs. dotnet vs. Info-ZIP).
+        let is_dir = name.ends_with('/') || u16le(&data, pos+38)? & 0x10 != 0;
         entries.push(Entry {
             name, method: u16le(&data, pos+10)?, crc: u32le(&data, pos+16)?,
             csize: u32le(&data, pos+20)?, usize_: u32le(&data, pos+24)?,
-            offset: u32le(&data, pos+42)?, is_dir: u16le(&data, pos+38)? & 0x10 != 0,
+            offset: u32le(&data, pos+42)?, is_dir,
         });
         pos += 46 + name_len + extra_len + comment_len;
     }
@@ -54,7 +57,11 @@ pub fn extract_zip(path: &Path, out_dir: &Path) -> Result<usize> {
     for e in entries {
         let rel = safe_relative(&e.name)?;
         let target = out_dir.join(rel);
-        if e.is_dir { std::fs::create_dir_all(&target)?; continue; }
+        if e.is_dir {
+            std::fs::create_dir_all(&target)
+                .map_err(|ioerr| Error::msg(format!("mkdir {}: {}", e.name, ioerr)))?;
+            continue;
+        }
         let p = e.offset as usize;
         if data.get(p..p+4) != Some(&[0x50, 0x4b, 0x03, 0x04]) { return Err(Error::msg("zip local header not found")); }
         let nlen = u16le(&data, p+26)? as usize;
@@ -73,8 +80,18 @@ pub fn extract_zip(path: &Path, out_dir: &Path) -> Result<usize> {
             m => return Err(Error::msg(format!("unsupported zip compression {}", m))),
         };
         if crc32fast::hash(&raw) != e.crc { return Err(Error::msg(format!("zip CRC mismatch: {}", e.name))); }
-        if let Some(parent) = target.parent() { std::fs::create_dir_all(parent)?; }
-        std::fs::write(&target, &raw)?;
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|ioerr| Error::msg(format!("mkdir parent of {}: {}", e.name, ioerr)))?;
+        }
+        // Archives produced by PowerShell Compress-Archive may contain duplicate
+        // names (e.g. a directory record and a file, or repeated files). On
+        // Windows std::fs::write then fails with AlreadyExists, aborting the
+        // whole install. Replace the previous entry deterministically.
+        if target.is_dir() { std::fs::remove_dir_all(&target)?; }
+        else if target.exists() { std::fs::remove_file(&target)?; }
+        std::fs::write(&target, &raw)
+            .map_err(|ioerr| Error::msg(format!("write {}: {}", e.name, ioerr)))?;
         written += 1;
     }
     Ok(written)
@@ -161,3 +178,16 @@ pub fn zip_dir(src: &Path, prefix: &str) -> Result<Vec<u8>> {
 
 #[allow(dead_code)]
 fn _check_component(_: Component<'_>) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn extracts_release_zip_if_present() {
+        let zip = match std::env::var("PL_TEST_ZIP") { Ok(v) if !v.is_empty() => v, _ => return };
+        let out = PathBuf::from("C:/Users/tester/zip-test-out");
+        let _ = std::fs::remove_dir_all(&out);
+        let n = extract_zip(Path::new(&zip), &out).unwrap();
+        assert!(n > 100, "only {} files extracted", n);
+    }
+}

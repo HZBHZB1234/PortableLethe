@@ -78,7 +78,10 @@ pub async fn install(state: &AppState, url: Option<&str>, version: Option<&str>,
             }));
         }
     }).await?;
-    let count = zipfile::extract_zip(&zip_path, &extracted)?;
+    state.log("info", "version", &format!("download complete: {}", name));
+    let count = zipfile::extract_zip(&zip_path, &extracted)
+        .map_err(|e| { state.log("error", "version", &format!("extract failed: {}", e)); e })?;
+    state.log("info", "version", &format!("extracted {} files", count));
     if count == 0 { return Err(Error::msg("release zip contained no files")); }
     if !find_exe(&extracted).is_some() {
         // Some releases wrap the payload in a single directory; find_exe recurses.
