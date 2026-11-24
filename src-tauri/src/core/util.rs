@@ -70,6 +70,19 @@ pub fn dir_size(path: &Path) -> u64 {
         .filter_map(|e| e.metadata().ok().map(|m| m.len())).sum()
 }
 
+/// Like `dir_size`, but follows junctions so a resource-set root (which is
+/// mostly junctions) reports the size of the data it exposes.
+pub fn dir_stats_follow(path: &Path) -> (u64, usize) {
+    let mut bytes = 0u64;
+    let mut files = 0usize;
+    for item in walkdir::WalkDir::new(path).follow_links(true).into_iter().flatten() {
+        if item.file_type().is_file() {
+            if let Ok(m) = item.metadata() { bytes += m.len(); files += 1; }
+        }
+    }
+    (bytes, files)
+}
+
 pub fn http_client(proxy: Option<&str>) -> Result<reqwest::Client> {
     http_client_with_header(proxy, None, None)
 }

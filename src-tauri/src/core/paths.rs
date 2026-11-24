@@ -11,6 +11,11 @@ pub struct PersistedState {
     pub current_version: Option<String>,
     pub previous_version: Option<String>,
     pub resources: ResourceStatus,
+    /// Selectable data-resource roots, decoupled from server versions.
+    #[serde(default)]
+    pub resource_sets: Vec<ResourceSet>,
+    #[serde(default)]
+    pub default_resource_set: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -53,8 +58,8 @@ impl Hub {
 
     pub fn ensure_layout(&self) -> Result<()> {
         for p in [self.blobs_dir(), self.versions_dir(), self.resources_dir(),
-                  self.instances_dir(), self.clientpkg_dir(), self.logs_dir(),
-                  self.staging_dir()] {
+                  self.resource_sets_dir(), self.instances_dir(), self.clientpkg_dir(),
+                  self.logs_dir(), self.staging_dir()] {
             std::fs::create_dir_all(p)?;
         }
         Ok(())
@@ -70,6 +75,11 @@ impl Hub {
     /// Stable real directory whose children are per-category junctions.
     pub fn resources_active(&self) -> PathBuf { self.resources_dir().join("active") }
     pub fn resources_objects(&self) -> PathBuf { self.resources_dir().join("objects") }
+    /// Stable roots for selectable resource sets; each root contains junctions.
+    pub fn resource_sets_dir(&self) -> PathBuf { self.resources_dir().join("sets") }
+    pub fn resource_set_dir(&self, id: &str) -> PathBuf {
+        self.resource_sets_dir().join(crate::core::util::sanitize_name(id))
+    }
     pub fn instances_dir(&self) -> PathBuf { self.root.join("instances") }
     pub fn clientpkg_dir(&self) -> PathBuf { self.root.join("clientpkg") }
     pub fn logs_dir(&self) -> PathBuf { self.root.join("logs") }

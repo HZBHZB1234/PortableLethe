@@ -1,13 +1,77 @@
 //! Server process lifecycle: spawn, health probe, exponential backoff restart,
 //! per-instance state machine and log capture (doc 02 §5).
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{Emitter, Manager};
+
 use serde::Serialize;
 use crate::{core::{config, storage, util}, error::{Error, Result}, model::*, state::{AppState, RuntimeInfo, RuntimeInfoPatch}};
+
+fn version_path(state: &AppState, rec: &InstanceRecord) -> Option<PathBuf> {
+    if let Some(v) = rec.version.as_deref() {
+        return Some(state.hub.current_version_path(v));
+    }
+    state.persisted.try_read().ok()
+        .and_then(|p| p.current_version.clone())
+        .map(|v| state.hub.current_version_path(&v))
+}
+
+fn resource_root(state: &AppState, rec: &InstanceRecord) -> Option<PathBuf> {
+    crate::core::resources::sets::root_for(state, rec.resource_set.as_deref()).ok()
+        .or_else(|| {
+            let p = state.hub.resources_current();
+            if p.is_dir() { Some(p) } else { None }
+        })
+}
+
+/// Repoint all junctions an instance depends on. Safe to call repeatedly; this
+/// is what makes switching server version or data set a one-command operation.
+async fn wire_instance(state: &AppState, rec: &InstanceRecord, mut rep: Option<&mut DepReport>) -> Result<()> {
+    let dir = state.hub.instance_dir(&rec.id);
+    for sub in ["data", "logs", "modfiles", "plugins"] { std::fs::create_dir_all(dir.join(sub))?; }
+    let vp = match version_path(state, rec) {
+        Some(v) => v,
+        None => {
+            if let Some(r) = rep.as_deref_mut() { r.missing.push(format!("{}:server 未选择服务端版本", rec.id)); }
+            return Ok(());
+        }
+    };
+    if !vp.join("OpenLethe.Server.exe").is_file() && !vp.join("OpenLethe.Server.dll").is_file() {
+        if let Some(r) = rep.as_deref_mut() { r.missing.push(format!("{}:server 版本 {} 未安装", rec.id, rec.version.as_deref().unwrap_or("?"))); }
+        return Ok(());
+    }
+    util::create_junction(&vp, &dir.join("server"))?;
+    if vp.join("wwwroot").is_dir() {
+        util::create_junction(&vp.join("wwwroot"), &dir.join("wwwroot"))?;
+    }
+    if vp.join("plugins").is_dir() {
+        util::create_junction(&vp.join("plugins"), &dir.join("plugins-src"))?;
+    }
+    let rr = resource_root(state, rec);
+    match rr {
+        Some(root) if root.join("StaticData").is_dir() => {
+            util::create_junction(&root, &dir.join("static"))?;
+            for extra in ["modfiles", "Localize"] {
+                let src = root.join(extra);
+                if src.is_dir() { util::create_junction(&src, &dir.join(format!("{}-src", extra.to_lowercase())))?; }
+            }
+        }
+        _ => {
+            if let Some(r) = rep.as_deref_mut() { r.missing.push(format!("{}:static 数据资源集未就绪", rec.id)); }
+        }
+    }
+    let boot = dir.join("data").join("server.bootstrap.json");
+    if !boot.is_file() {
+        let defaults = config::bootstrap_defaults(state, &rec.id, rec.port);
+        config::set(state, &rec.id, &defaults).await?;
+        if let Some(r) = rep.as_deref_mut() { r.fixed.push(format!("{}:bootstrap", rec.id)); }
+    } else {
+        // Rewrite bootstrap so STATIC_DATA_DIR follows a switched resource set.
+        config::set(state, &rec.id, &config::raw_values(state, &rec.id)?).await?;
+    }
+    Ok(())
+}
 
 fn find_exe(root: &Path) -> Option<PathBuf> {
     let mut all: Vec<PathBuf> = walkdir::WalkDir::new(root).follow_links(true).max_depth(4)
@@ -127,18 +191,6 @@ pub struct DepReport {
     pub missing: Vec<String>,
 }
 
-fn ensure_link(target: &std::path::Path, link: &std::path::Path, label: &str, rep: &mut DepReport) {
-    if link.symlink_metadata().is_ok() { return; }
-    if target.is_dir() {
-        match util::create_junction(target, link) {
-            Ok(()) => rep.fixed.push(label.to_string()),
-            Err(e) => rep.missing.push(format!("{}: {}", label, e)),
-        }
-    } else {
-        rep.missing.push(format!("{} 源目录不存在: {}", label, target.display()));
-    }
-}
-
 /// Self-heal everything a running instance needs: version/server/wwwroot/static
 /// links, directories and its bootstrap config. Called on Hub startup, instance
 /// start, and from the UI's "检查依赖" button.
@@ -150,43 +202,8 @@ pub async fn ensure_deps(state: &AppState, id: Option<&str>) -> Result<DepReport
             .cloned().collect()
     };
     let mut rep = DepReport::default();
-    for rec in records {
-        let dir = state.hub.instance_dir(&rec.id);
-        for sub in ["data", "logs", "modfiles", "plugins"] {
-            if std::fs::create_dir_all(dir.join(sub)).is_err() {
-                rep.missing.push(format!("{}: 无法创建 {} 目录", rec.id, sub));
-            }
-        }
-        let ver = rec.version.clone().or_else(|| state.persisted.try_read().ok()
-            .and_then(|p| p.current_version.clone()))
-            .ok_or_else(|| Error::msg("no version installed"))?;
-        let vp = state.hub.current_version_path(&ver);
-        if !vp.join("OpenLethe.Server.exe").is_file() && !vp.join("OpenLethe.Server.dll").is_file() {
-            rep.missing.push(format!("{}: 版本 {} 未安装", rec.id, ver));
-            continue;
-        }
-        ensure_link(&vp, &dir.join("server"), &format!("{}:server", rec.id), &mut rep);
-        if vp.join("wwwroot").is_dir() {
-            ensure_link(&vp.join("wwwroot"), &dir.join("wwwroot"), &format!("{}:wwwroot", rec.id), &mut rep);
-        }
-        if vp.join("plugins").is_dir() {
-            ensure_link(&vp.join("plugins"), &dir.join("plugins-src"), &format!("{}:plugins", rec.id), &mut rep);
-        }
-        let res = state.hub.resources_current();
-        if res.join("StaticData").is_dir() {
-            ensure_link(&res, &dir.join("static"), &format!("{}:static", rec.id), &mut rep);
-        } else {
-            rep.missing.push(format!("{}: 静态数据未同步（资源页点“同步全部资源”）", rec.id));
-        }
-        if res.join("modfiles").is_dir() {
-            ensure_link(&res.join("modfiles"), &dir.join("modfiles-src"), &format!("{}:modfiles", rec.id), &mut rep);
-        }
-        let boot = dir.join("data").join("server.bootstrap.json");
-        if !boot.is_file() {
-            let defaults = config::bootstrap_defaults(state, &rec.id, rec.port);
-            config::set(state, &rec.id, &defaults).await?;
-            rep.fixed.push(format!("{}:bootstrap", rec.id));
-        }
+    for rec in &records {
+        wire_instance(state, rec, Some(&mut rep)).await?;
     }
     Ok(rep)
 }
@@ -202,7 +219,8 @@ pub async fn list(state: &AppState) -> Result<Vec<InstanceInfo>> {
     Ok(p.instances.iter().map(|r| {
         let run = rt.get(&r.id).cloned().unwrap_or_default();
         InstanceInfo {
-            id: r.id.clone(), name: r.name.clone(), version: r.version.clone(), port: r.port,
+            id: r.id.clone(), name: r.name.clone(), version: r.version.clone(),
+            resource_set: r.resource_set.clone(), port: r.port,
             state: run.state, pid: run.pid, health: run.health, created_at: r.created_at.clone(),
             data_dir: state.hub.instance_dir(&r.id).join("data").to_string_lossy().into_owned(),
             restart_count: run.restart_count,
@@ -210,7 +228,8 @@ pub async fn list(state: &AppState) -> Result<Vec<InstanceInfo>> {
     }).collect())
 }
 
-pub async fn create(state: &AppState, name: &str, version: Option<&str>, port: Option<u16>) -> Result<InstanceInfo> {
+pub async fn create(state: &AppState, name: &str, version: Option<&str>,
+                    resource_set: Option<&str>, port: Option<u16>) -> Result<InstanceInfo> {
     let base = util::sanitize_name(name);
     let id = if state.persisted.read().await.instances.iter().any(|i| i.id == base) {
         format!("{}-{}", base, uuid::Uuid::new_v4().simple().to_string()[..6].to_string())
@@ -218,33 +237,77 @@ pub async fn create(state: &AppState, name: &str, version: Option<&str>, port: O
     let port = port.unwrap_or_else(|| storage::allocate_port(state));
     let current = state.persisted.read().await.current_version.clone();
     let ver = version.map(str::to_string).or(current)
-        .ok_or_else(|| Error::msg("install a version before creating an instance"))?;
-    let dir = state.hub.instance_dir(&id);
-    for sub in ["data", "logs", "modfiles", "plugins"] { std::fs::create_dir_all(dir.join(sub))?; }
-    let version_path = state.hub.current_version_path(&ver);
-    if !version_path.is_dir() { return Err(Error::msg(format!("version {} not installed", ver))); }
-    util::create_junction(&version_path, &dir.join("server"))?;
-    // ASP.NET Core uses the instance dir as its content root, so the admin
-    // panel's wwwroot must be visible there as well.
-    let wwwroot = version_path.join("wwwroot");
-    if wwwroot.is_dir() { util::create_junction(&wwwroot, &dir.join("wwwroot"))?; }
-    let resources = state.hub.resources_current();
-    if resources.is_dir() {
-        util::create_junction(&resources, &dir.join("static"))?;
-        util::create_junction(&resources.join("modfiles"), &dir.join("modfiles-src"))?;
-    }
-    let rec = InstanceRecord { id: id.clone(), name: name.to_string(), version: Some(ver), port,
-        created_at: util::now_iso(), auto_restart: true };
+        .ok_or_else(|| Error::msg("install a server version before creating an instance"))?;
+    let rs = resource_set.map(str::to_string).or_else(|| {
+        state.persisted.try_read().ok().and_then(|p| p.default_resource_set.clone())
+    });
+    let rec = InstanceRecord { id: id.clone(), name: name.to_string(), version: Some(ver),
+        resource_set: rs.clone(), port, created_at: util::now_iso(), auto_restart: true };
     {
         let mut p = state.persisted.write().await;
         p.instances.push(rec.clone());
     }
     state.runtime.write().await.insert(id.clone(), RuntimeInfo { state: InstanceState::Stopped, ..Default::default() });
-    let defaults = config::bootstrap_defaults(state, &id, port);
-    config::set(state, &id, &defaults).await?;
+    wire_instance(state, &rec, None).await?;
     state.persist().await?;
-    state.log("info", "instance", &format!("created {} on port {}", id, port));
+    state.log("info", "instance", &format!("created {} on port {} (server={}, resources={})",
+        id, port, rec.version.as_deref().unwrap_or("?"), rs.as_deref().unwrap_or("default")));
     info(state, &id).await
+}
+
+/// Switch the server executable an instance uses. Stops the process, repoints
+/// the junction, and restarts it if it was running.
+pub async fn set_version(state: &AppState, id: &str, version: &str) -> Result<InstanceInfo> {
+    let vp = state.hub.current_version_path(version);
+    if !vp.join("OpenLethe.Server.exe").is_file() && !vp.join("OpenLethe.Server.dll").is_file() {
+        return Err(Error::msg(format!("version {} is not installed", version)));
+    }
+    let (mut rec, was_running) = {
+        let p = state.persisted.read().await;
+        let rec = p.instances.iter().find(|i| i.id == id).cloned()
+            .ok_or_else(|| Error::msg("unknown instance"))?;
+        let running = match state.runtime.try_read() {
+            Ok(guard) => guard.get(id).map(|r| r.state == InstanceState::Running).unwrap_or(false),
+            Err(_) => false,
+        };
+        (rec, running)
+    };
+    if was_running { stop(state, id).await?; }
+    rec.version = Some(version.to_string());
+    { let mut p = state.persisted.write().await;
+      if let Some(r) = p.instances.iter_mut().find(|i| i.id == id) { *r = rec.clone(); } }
+    wire_instance(state, &rec, None).await?;
+    state.persist().await?;
+    if was_running { start(state, id).await?; }
+    state.log("info", "instance", &format!("{} switched to server version {}", id, version));
+    info(state, id).await
+}
+
+/// Switch the data-resource set an instance uses (junctions only, no copy).
+pub async fn set_resource_set(state: &AppState, id: &str, resource_set: &str) -> Result<InstanceInfo> {
+    let root = crate::core::resources::sets::root_for(state, Some(resource_set))?;
+    if !root.join("StaticData").is_dir() {
+        return Err(Error::msg("resource set has no StaticData directory"));
+    }
+    let (mut rec, was_running) = {
+        let p = state.persisted.read().await;
+        let rec = p.instances.iter().find(|i| i.id == id).cloned()
+            .ok_or_else(|| Error::msg("unknown instance"))?;
+        let running = match state.runtime.try_read() {
+            Ok(guard) => guard.get(id).map(|r| r.state == InstanceState::Running).unwrap_or(false),
+            Err(_) => false,
+        };
+        (rec, running)
+    };
+    if was_running { stop(state, id).await?; }
+    rec.resource_set = Some(resource_set.to_string());
+    { let mut p = state.persisted.write().await;
+      if let Some(r) = p.instances.iter_mut().find(|i| i.id == id) { *r = rec.clone(); } }
+    wire_instance(state, &rec, None).await?;
+    state.persist().await?;
+    if was_running { start(state, id).await?; }
+    state.log("info", "instance", &format!("{} switched to resource set {}", id, resource_set));
+    info(state, id).await
 }
 
 pub async fn start(state: &AppState, id: &str) -> Result<InstanceInfo> {

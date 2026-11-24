@@ -1,7 +1,10 @@
-// Mirror of the Rust serde DTOs in src-tauri/src/model.rs.
-// This file is the UI<->core contract; keep it in sync when changing commands.
+// Mirror of the Rust serde DTOs in src-tauri/src/model.rs / commands.rs.
+// This file is the UI <-> core contract; keep it in sync with the frozen Tauri API.
 
 export type InstanceState = 'Stopped' | 'Starting' | 'Running' | 'Unhealthy' | 'Updating' | 'Failed';
+
+/** 资源集来源（resource_set_create 的 source 参数取值）。 */
+export type ResourceSource = 'release' | 'official' | 'lethe' | 'game' | 'local';
 
 export interface HubConfig {
   data_dir: string | null;
@@ -51,6 +54,38 @@ export interface ResourceStatus {
   categories: Record<string, CategoryState>;
 }
 
+/** game_detect() 的返回值：本机 Limbus Company 安装探测结果。 */
+export interface GameInstall {
+  found: boolean;
+  game_dir: string | null;
+  data_dir: string | null;
+  cache_dir: string | null;
+  save_dir: string | null;
+  catalog: string | null;
+  settings: string | null;
+  lang_dir: string | null;
+  streaming_dir: string | null;
+  version: string | null;
+}
+
+/** resource_set_list() / resource_set_create() 的返回值。 */
+export interface ResourceSet {
+  id: string;
+  name: string;
+  kind: string;
+  source: string;
+  version: string | null;
+  path: string;
+  static_dir: string;
+  localize_dir: string;
+  modfiles_dir: string;
+  extra: Record<string, string>;
+  created_at: string;
+  size_bytes: number;
+  file_count: number;
+  is_default: boolean;
+}
+
 export interface HubStatus {
   app_version: string;
   hub_dir: string;
@@ -58,6 +93,8 @@ export interface HubStatus {
   instance_count: number;
   version_count: number;
   running_count: number;
+  resource_set_count: number;
+  game_install: GameInstall | null;
   config: HubConfig;
   resources: ResourceStatus;
 }
@@ -82,6 +119,7 @@ export interface InstanceInfo {
   id: string;
   name: string;
   version: string | null;
+  resource_set: string | null;
   port: number;
   state: InstanceState;
   pid: number | null;

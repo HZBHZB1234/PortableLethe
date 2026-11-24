@@ -15,7 +15,7 @@ pub fn ingest_blob(state: &AppState, path: &Path) -> Result<String> {
 
 /// Same-volume NTFS hardlink first; cross-volume falls back to a plain copy.
 /// With `reflink-crate` enabled this is where a CoW clone would be attempted.
-pub fn link_or_copy(state: &AppState, src: &Path, dst: &Path) -> Result<()> {
+pub fn link_or_copy(_state: &AppState, src: &Path, dst: &Path) -> Result<()> {
     if let Some(parent) = dst.parent() { std::fs::create_dir_all(parent)?; }
     if dst.exists() {
         let _ = std::fs::remove_file(dst);
@@ -69,7 +69,7 @@ pub fn allocate_port(state: &AppState) -> u16 {
 /// Remove an instance's overlays and links without touching the global store.
 pub fn remove_instance_layout(state: &AppState, id: &str) -> Result<()> {
     let dir = state.hub.instance_dir(id);
-    for name in ["server", "static", "modfiles"] {
+    for name in ["server", "wwwroot", "static", "modfiles", "modfiles-src", "localize-src", "plugins-src"] {
         let p = dir.join(name);
         if p.symlink_metadata().is_ok() { util::remove_link(&p)?; }
     }

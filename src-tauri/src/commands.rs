@@ -40,10 +40,46 @@ pub async fn hub_status(state: State<'_, AppState>) -> CResult<HubStatus> {
         platform: std::env::consts::OS.into(),
         instance_count: p.instances.len(),
         version_count: p.versions.len(),
+        resource_set_count: p.resource_sets.len(),
         running_count: rt.values().filter(|r| r.state == InstanceState::Running).count(),
         config: state.hub.config.clone(),
         resources: p.resources.clone(),
+        game_install: Some(crate::core::resources::game::detect(state.hub.config.game_dir.as_deref(), &state.hub.root)),
     })
+}
+
+/// Scan this machine for an installed Limbus Company game.
+#[tauri::command]
+pub fn game_detect(state: State<'_, AppState>) -> CResult<crate::model::GameInstall> {
+    Ok(crate::core::resources::game::detect(state.hub.config.game_dir.as_deref(), &state.hub.root))
+}
+
+#[tauri::command]
+pub async fn resource_set_list(state: State<'_, AppState>) -> CResult<Vec<ResourceSet>> {
+    Ok(crate::core::resources::sets::list(&state))
+}
+
+#[tauri::command]
+pub async fn resource_set_create(state: State<'_, AppState>, name: String, source: String,
+                                 source_path: Option<String>) -> CResult<ResourceSet> {
+    crate::core::resources::sets::create(&state, &name, &source, source_path.as_deref()).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn resource_set_delete(state: State<'_, AppState>, id: String) -> CResult<bool> {
+    crate::core::resources::sets::delete(&state, &id).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn resource_set_default(state: State<'_, AppState>, id: String) -> CResult<bool> {
+    crate::core::resources::sets::set_default(&state, &id).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn resource_set_reveal(state: State<'_, AppState>, id: String) -> CResult<bool> {
+    let set = crate::core::resources::sets::find(&state, &id)
+        .ok_or_else(|| err(Error::msg("resource set not found")))?;
+    reveal(&set.path, false)
 }
 
 #[tauri::command]
@@ -94,8 +130,19 @@ pub async fn instance_list(state: State<'_, AppState>) -> CResult<Vec<InstanceIn
 }
 
 #[tauri::command]
-pub async fn instance_create(state: State<'_, AppState>, name: String, version: Option<String>, port: Option<u16>) -> CResult<InstanceInfo> {
-    core::process::create(&state, &name, version.as_deref(), port).await.map_err(err)
+pub async fn instance_create(state: State<'_, AppState>, name: String, version: Option<String>,
+                             resource_set: Option<String>, port: Option<u16>) -> CResult<InstanceInfo> {
+    core::process::create(&state, &name, version.as_deref(), resource_set.as_deref(), port).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn instance_set_version(state: State<'_, AppState>, id: String, version: String) -> CResult<InstanceInfo> {
+    core::process::set_version(&state, &id, &version).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn instance_set_resource_set(state: State<'_, AppState>, id: String, resource_set: String) -> CResult<InstanceInfo> {
+    core::process::set_resource_set(&state, &id, &resource_set).await.map_err(err)
 }
 
 #[tauri::command]
@@ -116,6 +163,20 @@ pub async fn instance_restart(state: State<'_, AppState>, id: String) -> CResult
 #[tauri::command]
 pub async fn instance_delete(state: State<'_, AppState>, id: String) -> CResult<bool> {
     core::process::delete(&state, &id).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn instance_reveal(state: State<'_, AppState>, id: String) -> CResult<bool> {
+    let dir = state.hub.instance_dir(&id);
+    if !dir.is_dir() { return Err(err(Error::msg("instance not found"))); }
+    reveal(&dir.to_string_lossy(), false)
+}
+
+#[tauri::command]
+pub async fn version_reveal(state: State<'_, AppState>, version: String) -> CResult<bool> {
+    let dir = state.hub.current_version_path(&version);
+    if !dir.is_dir() { return Err(err(Error::msg("version not found"))); }
+    reveal(&dir.to_string_lossy(), false)
 }
 
 #[tauri::command]
@@ -187,7 +248,7 @@ pub async fn log_tail(state: State<'_, AppState>, limit: Option<usize>, instance
 
 #[tauri::command]
 pub async fn request_restart(state: State<'_, AppState>, instance_id: String, reason: String) -> CResult<bool> {
-    state.hub.root.to_string_lossy().len(); // keep state reference live
+    let _ = state.hub.root.to_string_lossy().len(); // keep state reference live
     if let Ok(h) = state.handle.lock() {
         if let Some(h) = h.as_ref() {
             let _ = h.emit(EV_RESTART_REQUESTED, &RestartRequestedEvent { instance_id: instance_id.clone(), reason });

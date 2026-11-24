@@ -25,7 +25,7 @@ New-Item -ItemType Directory -Force $stage | Out-Null
 Copy-Item $Exe (Join-Path $stage 'PortableLetheHub.exe') -Force
 if (Test-Path $ServerSchema) { Copy-Item $ServerSchema (Join-Path $stage 'config-schema.json') -Force }
 
-@'
+$readme = @'
 Portable Lethe Hub (no installation required)
 
 Run:  double-click PortableLetheHub.exe
@@ -34,14 +34,25 @@ Data: %LOCALAPPDATA%\PortableLethe\hub  (override with PORTABLE_LETHE_HUB_DIR)
 This build needs WebView2 Runtime (already present on Windows 11 / modern Edge).
 config-schema.json is optional: Hub falls back to built-in fields when absent.
 
+Three decoupled sections (switch any of them independently, no file copies):
+  1. Server    - installed server executables. "Set default" only affects NEW
+                 instances; existing instances keep their own pinned version.
+  2. Data      - resource sets, each a junction root over StaticData / Localize
+                 / modfiles. Sources: release zip, official CDN, Lethe CDN, or
+                 a locally installed Limbus Company game (auto-detected).
+                 Switching sets is O(1), no file copies.
+  3. Instances - each deployment binds one server version and one resource set
+                 via junctions. Switch either from the instance card; the
+                 process restarts automatically.
+
 First-use flow:
-  1. Versions  -> install prebuilt server (static data is fetched automatically
-                 from the release snapshot unless another source is configured).
-  2. Resources -> choose static source (release / official CDN / Lethe CDN)
-                 and sync modfiles / bundles.
-  3. Instances -> create + start an instance; open its admin panel with 面板.
-  4. ClientPackage -> export a prebuilt launcher bundle for players.
-'@ | Set-Content -Path (Join-Path $stage 'README.txt') -Encoding UTF8
+  1. Install a server version under "Server" (auto-fetches static data).
+  2. Under "Data" import the local game if detected, or sync a source.
+  3. Create an instance under "Instances" choosing server + resource set.
+  4. Start it and open its admin panel.
+  5. ClientPackage -> export a prebuilt launcher bundle for players.
+'@
+Set-Content -Path (Join-Path $stage 'README.txt') -Value $readme -Encoding UTF8
 
 $zip = Join-Path $outDir ("PortableLetheHub_{0}_portable_win-x64.zip" -f $version)
 if (Test-Path $zip) { Remove-Item $zip -Force }

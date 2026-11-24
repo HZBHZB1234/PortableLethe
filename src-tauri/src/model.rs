@@ -82,6 +82,46 @@ pub struct ResourceStatus {
     pub categories: BTreeMap<String, CategoryState>,
 }
 
+/// A selectable data-resource root. The root is a real directory whose
+/// children are junctions, so switching a set costs one junction repoint.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ResourceSet {
+    pub id: String,
+    pub name: String,
+    /// release | official | lethe | game | local
+    pub kind: String,
+    /// Human-readable source label (may include the detected game path).
+    pub source: String,
+    pub version: String,
+    pub path: String,
+    pub static_dir: String,
+    pub localize_dir: String,
+    pub modfiles_dir: String,
+    /// Extra junctions exposed for game sources: cache, lang, streaming, etc.
+    pub extra: BTreeMap<String, String>,
+    pub created_at: String,
+    pub size_bytes: u64,
+    pub file_count: usize,
+    pub is_default: bool,
+}
+
+/// Result of scanning this machine for an installed Limbus Company game.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct GameInstall {
+    pub found: bool,
+    pub game_dir: Option<String>,
+    pub data_dir: Option<String>,
+    pub cache_dir: Option<String>,
+    pub save_dir: Option<String>,
+    pub catalog: Option<String>,
+    pub settings: Option<String>,
+    pub lang_dir: Option<String>,
+    pub streaming_dir: Option<String>,
+    pub version: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct HubStatus {
     pub app_version: String,
@@ -89,9 +129,11 @@ pub struct HubStatus {
     pub platform: String,
     pub instance_count: usize,
     pub version_count: usize,
+    pub resource_set_count: usize,
     pub running_count: usize,
     pub config: HubConfig,
     pub resources: ResourceStatus,
+    pub game_install: Option<GameInstall>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,7 +164,11 @@ impl InstanceState { pub fn as_str(&self) -> &'static str { match self {
 pub struct InstanceRecord {
     pub id: String,
     pub name: String,
+    /// Installed server executable/version (one of versions/<name>).
     pub version: Option<String>,
+    /// Selected data-resource set id (one of resources/sets/<id>).
+    #[serde(default)]
+    pub resource_set: Option<String>,
     pub port: u16,
     pub created_at: String,
     #[serde(default)]
@@ -134,6 +180,8 @@ pub struct InstanceInfo {
     pub id: String,
     pub name: String,
     pub version: Option<String>,
+    #[serde(default)]
+    pub resource_set: Option<String>,
     pub port: u16,
     pub state: InstanceState,
     pub pid: Option<u32>,

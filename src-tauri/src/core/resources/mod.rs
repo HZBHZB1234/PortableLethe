@@ -2,6 +2,8 @@ pub mod catalog;
 pub mod staticdata;
 pub mod modfiles;
 pub mod bundles;
+pub mod game;
+pub mod sets;
 
 use std::path::Path;
 use crate::{core::util, error::{Error, Result}, model::SyncReport, state::AppState};

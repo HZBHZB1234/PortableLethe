@@ -176,11 +176,9 @@ pub async fn switch(state: &AppState, version: &str) -> Result<VersionInfo> {
     let name = util::sanitize_name(version);
     let target = state.hub.current_version_path(&name);
     if !target.is_dir() { return Err(Error::msg(format!("version {} is not installed", name))); }
-    crate::core::process::stop_all(state).await;
     util::create_junction(&target, &state.hub.root.join("current"))?;
     #[cfg(windows)]
     {
-        // Also place a junction at the conventional location for tools that expect it.
         let link = state.hub.versions_dir().join("current");
         util::create_junction(&target, &link)?;
     }
@@ -189,17 +187,15 @@ pub async fn switch(state: &AppState, version: &str) -> Result<VersionInfo> {
         p.previous_version = p.current_version.clone();
         p.current_version = Some(name.clone());
         for v in &mut p.versions { v.is_current = v.name == name; }
-        for rec in &mut p.instances { rec.version = Some(name.clone()); }
+        // Instances keep their own pinned server executable. "Set default"
+        // only decides which version NEW instances use.
         p.versions.iter().find(|v| v.name == name).cloned().unwrap_or(VersionInfo {
             name: name.clone(), path: target.to_string_lossy().into_owned(),
             installed_at: util::now_iso(), size_bytes: util::dir_size(&target), is_current: true, source: "filesystem".into(),
         })
     };
-    // Re-point every instance's server junction.
-    let ids: Vec<String> = state.persisted.read().await.instances.iter().map(|i| i.id.clone()).collect();
-    for id in ids { util::create_junction(&target, &state.hub.instance_dir(&id).join("server"))?; }
     state.persist().await?;
-    state.log("info", "version", &format!("switched current version to {}", name));
+    state.log("info", "version", &format!("set default server version to {} (existing instances unchanged)", name));
     Ok(info)
 }
 

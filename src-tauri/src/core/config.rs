@@ -132,10 +132,14 @@ pub async fn set(state: &AppState, id: &str, values: &JsonMap) -> Result<JsonMap
     util::atomic_write_json(&instance_config_path(state, id), &merged, true)?;
 
     // Bootstrap file: absolute paths derived from the Hub layout, never written
-    // into the server's panel-editable area.
+    // into the server's panel-editable area. Static data resolves through this
+    // instance's selected resource set (a junction root), so switching the set
+    // only repoints that junction.
     let mut boot: JsonMap = merged.clone();
     boot.insert("MOD_FILES_DIR".into(), serde_json::Value::String(dir.join("modfiles").to_string_lossy().into_owned()));
-    boot.insert("STATIC_DATA_DIR".into(), serde_json::Value::String(state.hub.resources_current().to_string_lossy().into_owned()));
+    let res_root = crate::core::resources::sets::root_for(state, rec.resource_set.as_deref())
+        .unwrap_or_else(|_| state.hub.resources_current());
+    boot.insert("STATIC_DATA_DIR".into(), serde_json::Value::String(res_root.to_string_lossy().into_owned()));
     boot.insert("HUB_INSTANCE_ID".into(), serde_json::Value::String(id.to_string()));
     boot.insert("PORT".into(), serde_json::json!(rec.port));
     // Decrypt secrets so the server can use them.

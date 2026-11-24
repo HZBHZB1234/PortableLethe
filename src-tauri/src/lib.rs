@@ -24,6 +24,11 @@ pub fn run() {
                 children: state.children.clone(),
             };
             tauri::async_runtime::spawn(async move {
+                // Migrate pre-decoupling state: register `resources/current`
+                // as the first selectable data-resource set.
+                if let Err(e) = crate::core::resources::sets::ensure_legacy(&startup).await {
+                    startup.log("warn", "migrate", &format!("resource set migration failed: {}", e));
+                }
                 match crate::core::process::ensure_deps(&startup, None).await {
                     Ok(rep) if !rep.fixed.is_empty() => startup.log("info", "deps",
                         &format!("auto-configured: {}", rep.fixed.join(", "))),
@@ -45,14 +50,24 @@ pub fn run() {
             commands::hub_config_get,
             commands::hub_config_set,
             commands::hub_config_update,
+            commands::game_detect,
+            commands::resource_set_list,
+            commands::resource_set_create,
+            commands::resource_set_delete,
+            commands::resource_set_default,
+            commands::resource_set_reveal,
             commands::instance_list,
             commands::instance_create,
+            commands::instance_set_version,
+            commands::instance_set_resource_set,
             commands::instance_start,
             commands::instance_stop,
             commands::instance_restart,
             commands::instance_delete,
             commands::instance_open_admin,
+            commands::instance_reveal,
             commands::version_list,
+            commands::version_reveal,
             commands::version_install,
             commands::version_build_from_source,
             commands::version_switch,
